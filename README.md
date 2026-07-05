@@ -1,22 +1,22 @@
 # Azure AI Transcript Analyzer
 
-A local web app that analyzes already-transcribed call-center text in English and Armenian. It structures the conversation by speaker role and extracts key PII/case attributes such as name, address, phone, email, and SSN or national ID.
-
-The migrated backend is now **C# / .NET / ASP.NET Core Web API** in `backend-dotnet`. The original Python/FastAPI backend remains in `backend` only as a deprecated reference until the .NET backend is fully accepted.
+A local web app for analyzing already-transcribed call-center text in English and Armenian. The app structures conversation turns by speaker role and extracts key PII/case attributes such as name, address, phone number, email, and SSN or national ID.
 
 ## Current Stack
 
-- Backend: ASP.NET Core Web API (`backend-dotnet`)
-- Frontend: React + Vite (`frontend`)
+- Backend: C# / .NET / ASP.NET Core Web API in `backend-dotnet`
+- Frontend: React + Vite in `frontend`
 - Azure AI Language: PII/entity extraction when configured
 - Azure OpenAI: role detection when configured and explicit labels are missing
 - Regex fallback: local extraction when Azure services are missing or fail
 
-## Configuration
+The final backend is `backend-dotnet`. There is no Python/FastAPI backend in the final delivery.
 
-Do not commit real keys, `.env` files, real transcripts, or real PII.
+## Secrets And Configuration
 
-Set configuration with environment variables, .NET user secrets, or local uncommitted settings:
+Never commit secrets, `.env` files, Azure keys, real transcripts, or real PII.
+
+Configure Azure services with environment variables, .NET user secrets, or another local uncommitted secret store:
 
 ```bash
 export AZURE_LANGUAGE_ENDPOINT="https://<your-language-resource>.cognitiveservices.azure.com/"
@@ -26,9 +26,11 @@ export AZURE_OPENAI_KEY="<your-openai-key>"
 export AZURE_OPENAI_DEPLOYMENT="<your-deployment-name>"
 ```
 
-If Azure services are not configured, the backend still runs with regex extraction and Speaker 1 / Speaker 2 fallback role labels.
+If Azure services are not configured, the backend still runs with regex extraction and fallback speaker labels.
 
-## Running The .NET Backend
+## Run The .NET Backend
+
+From the project root:
 
 ```bash
 cd backend-dotnet
@@ -36,18 +38,22 @@ dotnet restore
 dotnet run --no-launch-profile --urls http://localhost:8000
 ```
 
-Available endpoints:
+Backend endpoints:
 
 - `GET http://localhost:8000/health`
 - `POST http://localhost:8000/analyze`
 - `GET http://localhost:8000/openapi/v1.json`
 
-## Running The Frontend
+Successful `POST /analyze` responses are also saved as human-readable TXT files under `backend-dotnet/local-results/`. This folder is created automatically and ignored by Git.
+
+## Run The Frontend
+
+From a second terminal:
 
 ```bash
 cd frontend
 npm install
-npm run dev
+VITE_API_BASE_URL=http://localhost:8000 npm run dev
 ```
 
 Open:
@@ -56,16 +62,9 @@ Open:
 http://localhost:5173
 ```
 
-The frontend uses `VITE_API_BASE_URL` when provided, otherwise it defaults to `http://localhost:8000`.
+`VITE_API_BASE_URL` controls which backend the frontend calls. For local development with `backend-dotnet`, use `http://localhost:8000`.
 
-Example:
-
-```bash
-cd frontend
-VITE_API_BASE_URL=http://localhost:8000 npm run dev
-```
-
-## API Request
+## API Request Format
 
 The .NET backend accepts both `transcript` and `transcriptText`:
 
@@ -104,12 +103,12 @@ The .NET backend accepts both `transcript` and `transcriptText`:
     "other": []
   },
   "rawAzureEntities": [],
-  "warning": "Azure AI Language is not configured",
+  "warning": null,
   "roleMethod": "labels"
 }
 ```
 
-## Manual Test Requests
+## Manual Curl Tests
 
 English:
 
@@ -134,9 +133,3 @@ curl -i -X POST http://localhost:8000/analyze \
   -H "Content-Type: application/json" \
   -d '{"language":"en","transcript":""}'
 ```
-
-## Deprecated Python Backend
-
-The old Python/FastAPI backend in `backend` should stay temporarily as a behavior reference. Once the .NET backend is accepted and tested with real Azure resources using sanitized inputs, the Python backend can be moved to an archive folder or deleted in a separate cleanup step.
-
-Do not copy secrets from `backend/.env` into tracked files.

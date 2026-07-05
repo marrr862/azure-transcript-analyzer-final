@@ -28,8 +28,37 @@ public sealed class AzureLanguageService(
         ["BankAccountNumber"] = "Other"
     };
 
-    public async Task<(ExtractedAttributes Attributes, IReadOnlyList<RawAzureEntity> RawEntities, string? Warning)> AnalyzeAsync(
-        string transcript,
+    public async Task<(IReadOnlyList<ExtractedAttributes> Attributes, IReadOnlyList<RawAzureEntity> RawEntities, IReadOnlyList<string> Warnings)> AnalyzeChunksAsync(
+        IReadOnlyList<TranscriptChunk> chunks,
+        string? language,
+        CancellationToken cancellationToken)
+    {
+        if (!configuration.AzureLanguageConfigured)
+        {
+            return ([], [], ["Azure AI Language is not configured"]);
+        }
+
+        var attributes = new List<ExtractedAttributes>();
+        var rawEntities = new List<RawAzureEntity>();
+        var warnings = new List<string>();
+
+        foreach (var chunk in chunks)
+        {
+            var (chunkAttributes, chunkRawEntities, chunkWarning) = await AnalyzeChunkAsync(chunk, language, cancellationToken);
+            attributes.Add(chunkAttributes);
+            rawEntities.AddRange(chunkRawEntities);
+
+            if (!string.IsNullOrWhiteSpace(chunkWarning))
+            {
+                warnings.Add(chunkWarning);
+            }
+        }
+
+        return (attributes, rawEntities, warnings);
+    }
+
+    private async Task<(ExtractedAttributes Attributes, IReadOnlyList<RawAzureEntity> RawEntities, string? Warning)> AnalyzeChunkAsync(
+        TranscriptChunk chunk,
         string? language,
         CancellationToken cancellationToken)
     {
@@ -44,8 +73,8 @@ public sealed class AzureLanguageService(
             var url = $"{endpoint}/language/:analyze-text?api-version=2023-04-01";
             var document = new Dictionary<string, object?>
             {
-                ["id"] = "1",
-                ["text"] = transcript.Length > 5120 ? transcript[..5120] : transcript
+                ["id"] = chunk.Index.ToString(),
+                ["text"] = chunk.Text.Length > 5120 ? chunk.Text[..5120] : chunk.Text
             };
 
             var azureLanguage = NormalizeAzureLanguage(language);
@@ -68,7 +97,7 @@ public sealed class AzureLanguageService(
             if (!response.IsSuccessStatusCode)
             {
                 logger.LogWarning("Azure Language failed with status {StatusCode}", response.StatusCode);
-                return (new ExtractedAttributes(), [], $"Azure AI Language failed with status {(int)response.StatusCode}");
+                return (new ExtractedAttributes(), [], $"Azure AI Language failed for chunk {chunk.Index + 1} with status {(int)response.StatusCode}");
             }
 
             using var responseDocument = await JsonDocument.ParseAsync(
@@ -139,7 +168,7 @@ public sealed class AzureLanguageService(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Azure Language analysis failed");
-            return (new ExtractedAttributes(), [], $"Azure AI Language failed: {ex.Message}");
+            return (new ExtractedAttributes(), [], $"Azure AI Language failed for chunk {chunk.Index + 1}: {ex.Message}");
         }
     }
 

@@ -1,18 +1,16 @@
 # Project Agent Instructions
 
-This project has migrated from a Python/FastAPI backend to a C#/.NET ASP.NET Core Web API backend.
+This project is finalized around a React/Vite frontend and a C#/.NET ASP.NET Core Web API backend.
 
-## Primary Backend
+## Backend
 
-- Use `backend-dotnet` for new backend work.
+- Use `backend-dotnet` for all backend work.
+- Do not recreate or depend on the old Python/FastAPI backend.
 - Keep the public API compatible with the React frontend.
 - Preserve support for both request fields: `transcript` and `transcriptText`.
 - Keep `/health`, `/analyze`, and `/openapi/v1.json` available.
-
-## Deprecated Backend
-
-- The `backend` Python/FastAPI folder is deprecated and should be used only as a behavior reference.
-- Do not delete or archive it unless explicitly requested.
+- Keep local TXT output storage under `backend-dotnet/local-results/`.
+- Do not add a database, Entity Framework, or database packages.
 
 ## Frontend
 
@@ -24,10 +22,10 @@ This project has migrated from a Python/FastAPI backend to a C#/.NET ASP.NET Cor
 
 - Never commit `.env` files, API keys, credentials, real transcripts, or real PII.
 - Use only sanitized examples in docs, tests, and prompts.
-- Keep generated folders such as `node_modules`, `venv`, `bin`, `obj`, and `__pycache__` out of Git.
+- Keep generated folders such as `node_modules`, `dist`, `bin`, `obj`, and `local-results` out of Git.
 
 ## Verification
 
 - Build the .NET backend with `dotnet build backend-dotnet/backend-dotnet.csproj`.
 - Run the backend with `dotnet run --project backend-dotnet/backend-dotnet.csproj --no-launch-profile --urls http://localhost:8000`.
-- Run the frontend with `npm run dev` from `frontend`.
+- Run the frontend with `VITE_API_BASE_URL=http://localhost:8000 npm run dev` from `frontend`.

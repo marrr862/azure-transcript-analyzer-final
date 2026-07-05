@@ -20,6 +20,12 @@ public sealed class ConfigurationService(IConfiguration configuration)
     public string AzureOpenAiApiVersion =>
         Read("AzureOpenAI:ApiVersion", "AZURE_OPENAI_API_VERSION", "2024-10-21");
 
+    public int TranscriptChunkSize =>
+        ReadInt("TranscriptChunking:ChunkSize", "TRANSCRIPT_CHUNK_SIZE", 4000);
+
+    public int TranscriptChunkOverlap =>
+        ReadInt("TranscriptChunking:Overlap", "TRANSCRIPT_CHUNK_OVERLAP", 200);
+
     public bool AzureLanguageConfigured =>
         LooksConfigured(AzureLanguageEndpoint) && LooksConfigured(AzureLanguageKey);
 
@@ -33,6 +39,12 @@ public sealed class ConfigurationService(IConfiguration configuration)
         return configuration[environmentKey]
             ?? configuration[configKey]
             ?? fallback;
+    }
+
+    private int ReadInt(string configKey, string environmentKey, int fallback)
+    {
+        var raw = Read(configKey, environmentKey);
+        return int.TryParse(raw, out var value) && value > 0 ? value : fallback;
     }
 
     private static bool LooksConfigured(string value)

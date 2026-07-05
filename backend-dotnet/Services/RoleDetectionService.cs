@@ -17,22 +17,41 @@ public sealed partial class RoleDetectionService(
         {"turns":[{"role":"Agent","text":"..."},{"role":"Caller","text":"..."}]}
         """;
 
-    public async Task<(IReadOnlyList<ConversationTurn> Turns, string Method)> DetectAsync(
+    public async Task<(IReadOnlyList<ConversationTurn> Turns, string Method, IReadOnlyList<string> Warnings)> DetectAsync(
         string transcript,
+        IReadOnlyList<TranscriptChunk> chunks,
         CancellationToken cancellationToken)
     {
         if (ContainsExplicitLabels(transcript))
         {
-            return (ParseExplicitLabels(transcript), "labels");
+            return (ParseExplicitLabels(transcript), "labels", []);
         }
 
-        var openAiTurns = await TryDetectWithOpenAiAsync(transcript, cancellationToken);
-        if (openAiTurns.Count > 0 && openAiTurns.All(turn => turn.Role is "Agent" or "Caller"))
+        if (configuration.AzureOpenAiConfigured)
         {
-            return (openAiTurns, "openai");
+            var openAiTurns = new List<ConversationTurn>();
+            var warnings = new List<string>();
+
+            foreach (var chunk in chunks)
+            {
+                var (chunkTurns, chunkWarning) = await TryDetectChunkWithOpenAiAsync(chunk, cancellationToken);
+                if (chunkTurns.Count > 0 && chunkTurns.All(turn => turn.Role is "Agent" or "Caller"))
+                {
+                    openAiTurns.AddRange(chunkTurns);
+                    continue;
+                }
+
+                warnings.Add(chunkWarning ?? $"Azure OpenAI role detection was uncertain for chunk {chunk.Index + 1}; used Speaker fallback for that chunk");
+                openAiTurns.AddRange(SpeakerFallback(chunk.Text));
+            }
+
+            if (openAiTurns.Count > 0)
+            {
+                return (DeduplicateAdjacentTurns(openAiTurns), warnings.Count == 0 ? "openai" : "openai-partial", warnings);
+            }
         }
 
-        return (SpeakerFallback(transcript), "fallback");
+        return (SpeakerFallback(transcript), "fallback", []);
     }
 
     private static bool ContainsExplicitLabels(string transcript)
@@ -62,13 +81,13 @@ public sealed partial class RoleDetectionService(
         return turns.Count > 0 ? turns : SpeakerFallback(transcript);
     }
 
-    private async Task<IReadOnlyList<ConversationTurn>> TryDetectWithOpenAiAsync(
-        string transcript,
+    private async Task<(IReadOnlyList<ConversationTurn> Turns, string? Warning)> TryDetectChunkWithOpenAiAsync(
+        TranscriptChunk chunk,
         CancellationToken cancellationToken)
     {
         if (!configuration.AzureOpenAiConfigured)
         {
-            return [];
+            return ([], null);
         }
 
         try
@@ -84,7 +103,7 @@ public sealed partial class RoleDetectionService(
                 messages = new object[]
                 {
                     new { role = "system", content = SystemPrompt },
-                    new { role = "user", content = transcript }
+                    new { role = "user", content = chunk.Text }
                 },
                 max_completion_tokens = 4000,
                 response_format = new { type = "json_object" }
@@ -95,7 +114,7 @@ public sealed partial class RoleDetectionService(
             if (!response.IsSuccessStatusCode)
             {
                 logger.LogWarning("Azure OpenAI role detection failed with status {StatusCode}", response.StatusCode);
-                return [];
+                return ([], $"Azure OpenAI role detection failed for chunk {chunk.Index + 1} with status {(int)response.StatusCode}");
             }
 
             using var document = await JsonDocument.ParseAsync(
@@ -110,7 +129,7 @@ public sealed partial class RoleDetectionService(
 
             if (string.IsNullOrWhiteSpace(content))
             {
-                return [];
+                return ([], $"Azure OpenAI role detection returned empty content for chunk {chunk.Index + 1}");
             }
 
             using var roleDocument = JsonDocument.Parse(content);
@@ -120,7 +139,7 @@ public sealed partial class RoleDetectionService(
 
             if (turnsElement.ValueKind != JsonValueKind.Array)
             {
-                return [];
+                return ([], $"Azure OpenAI role detection returned invalid JSON shape for chunk {chunk.Index + 1}");
             }
 
             var parsed = new List<ConversationTurn>();
@@ -143,12 +162,12 @@ public sealed partial class RoleDetectionService(
                 }
             }
 
-            return parsed;
+            return (parsed, null);
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Azure OpenAI role detection failed");
-            return [];
+            return ([], $"Azure OpenAI role detection failed for chunk {chunk.Index + 1}: {ex.Message}");
         }
     }
 
@@ -173,6 +192,25 @@ public sealed partial class RoleDetectionService(
             Role = index % 2 == 0 ? "Speaker 1" : "Speaker 2",
             Text = text
         }).ToList();
+    }
+
+    private static IReadOnlyList<ConversationTurn> DeduplicateAdjacentTurns(IEnumerable<ConversationTurn> turns)
+    {
+        var deduped = new List<ConversationTurn>();
+        foreach (var turn in turns)
+        {
+            var previous = deduped.LastOrDefault();
+            if (previous is not null
+                && previous.Role == turn.Role
+                && string.Equals(previous.Text, turn.Text, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            deduped.Add(turn);
+        }
+
+        return deduped;
     }
 
     private static IEnumerable<string> SplitCandidateTurns(string transcript)
