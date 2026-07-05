@@ -1,0 +1,24 @@
+@backend_dotnet_HostAddress = http://localhost:8000
+
+GET {{backend_dotnet_HostAddress}}/health
+Accept: application/json
+
+###
+
+POST {{backend_dotnet_HostAddress}}/analyze
+Content-Type: application/json
+
+{
+  "language": "en",
+  "transcript": "Agent: Hello, how can I help you?\nCaller: My name is John Smith. My phone number is 555-867-5309 and my email is john.smith@example.com."
+}
+
+###
+
+POST {{backend_dotnet_HostAddress}}/analyze
+Content-Type: application/json
+
+{
+  "language": "hy",
+  "transcriptText": "Գործակալ: Բարև ձեզ։\nԶանգահարող: Իմ անունը Արա Պետրոսյան է։ Իմ հեռախոսահամարն է +374 91 123456։"
+}

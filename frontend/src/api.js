@@ -1,4 +1,4 @@
-const BASE_URL = "http://localhost:8000";
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 /**
  * POST /analyze
@@ -10,7 +10,7 @@ export async function analyzeTranscript(transcript, language = "auto") {
   const response = await fetch(`${BASE_URL}/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ transcript, language }),
+    body: JSON.stringify({ transcript, transcriptText: transcript, language }),
   });
 
   if (!response.ok) {
