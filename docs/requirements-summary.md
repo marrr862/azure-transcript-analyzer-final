@@ -139,3 +139,32 @@ If Agent/Caller cannot be confidently detected, return fallback labels:
 - Keep secrets in local environment variables, local `.env`, or .NET user secrets.
 - Keep `backend/.env`, `frontend/node_modules`, `backend/venv`, and generated files out of Git.
 - Do not paste real API keys or real patient/customer data into Codex prompts.
+
+## Storage requirement
+
+The project does not require a database at this stage.
+
+If transcript analysis results, logs, or test outputs need to be stored temporarily, use simple local text or JSON files only.
+
+Rules:
+- Do not add a database.
+- Do not add Entity Framework, SQL Server, PostgreSQL, MongoDB, or similar storage.
+- Prefer simple local files such as `.txt` or `.json` for temporary development/testing needs.
+- Do not store real PII or real transcripts in committed files.
+- Any local generated output files must be ignored by Git.
+
+## Large transcript / chunking requirement
+
+The system should handle long conversations that may exceed AI service input limits.
+
+The backend should support splitting long transcript text into smaller chunks before sending to Azure AI or Azure OpenAI.
+
+Chunking rules:
+- Split long transcripts into safe text chunks before AI processing.
+- Preserve conversation order.
+- Merge chunk-level extraction results into one final response.
+- Deduplicate repeated extracted attributes where possible.
+- Speaker role detection should still return a single ordered conversation list.
+- If Azure OpenAI is used for role detection, avoid sending text that is too large for the model context window.
+- If a chunk fails, handle the error gracefully and return partial results with a warning if appropriate.
+- Add clear constants/configuration for chunk size so it can be adjusted later.
