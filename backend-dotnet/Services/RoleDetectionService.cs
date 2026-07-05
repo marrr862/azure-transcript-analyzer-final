@@ -12,9 +12,30 @@ public sealed partial class RoleDetectionService(
 {
     private const string SystemPrompt = """
         You are a call-center transcript analyzer.
-        Split the transcript into conversation turns with roles "Agent", "Caller", or "Unknown".
-        Preserve original wording and language. Return only JSON:
-        {"turns":[{"role":"Agent","text":"..."},{"role":"Caller","text":"..."}]}
+
+        Task:
+        Split the transcript into conversation turns.
+
+        Allowed roles:
+        - Agent
+        - Caller
+        - Unknown
+
+        Rules:
+        - Use Agent for a support representative, operator, company employee, or service worker.
+        - Use Caller for the customer, client, patient, or person asking for help.
+        - Use Unknown only if the role is not clear.
+        - Preserve original wording and original language.
+        - Do not invent information.
+        - Return only valid JSON.
+
+        Required JSON format:
+        {
+          "turns": [
+            { "role": "Agent", "text": "..." },
+            { "role": "Caller", "text": "..." }
+          ]
+        }
         """;
 
     public async Task<(IReadOnlyList<ConversationTurn> Turns, string Method, IReadOnlyList<string> Warnings)> DetectAsync(
@@ -35,6 +56,7 @@ public sealed partial class RoleDetectionService(
             foreach (var chunk in chunks)
             {
                 var (chunkTurns, chunkWarning) = await TryDetectChunkWithOpenAiAsync(chunk, cancellationToken);
+
                 if (chunkTurns.Count > 0 && chunkTurns.All(turn => turn.Role is "Agent" or "Caller"))
                 {
                     openAiTurns.AddRange(chunkTurns);
@@ -47,7 +69,11 @@ public sealed partial class RoleDetectionService(
 
             if (openAiTurns.Count > 0)
             {
-                return (DeduplicateAdjacentTurns(openAiTurns), warnings.Count == 0 ? "openai" : "openai-partial", warnings);
+                return (
+                    DeduplicateAdjacentTurns(openAiTurns),
+                    warnings.Count == 0 ? "openai" : "openai-partial",
+                    warnings
+                );
             }
         }
 
@@ -62,9 +88,11 @@ public sealed partial class RoleDetectionService(
     private static IReadOnlyList<ConversationTurn> ParseExplicitLabels(string transcript)
     {
         var turns = new List<ConversationTurn>();
+
         foreach (var line in SplitCandidateTurns(transcript))
         {
             var match = ExplicitLabelRegex().Match(line);
+
             if (!match.Success)
             {
                 continue;
@@ -72,9 +100,14 @@ public sealed partial class RoleDetectionService(
 
             var role = NormalizeExplicitRole(match.Groups[1].Value);
             var text = ExplicitLabelRegex().Replace(line, "").Trim();
+
             if (!string.IsNullOrWhiteSpace(text))
             {
-                turns.Add(new ConversationTurn { Role = role, Text = text });
+                turns.Add(new ConversationTurn
+                {
+                    Role = role,
+                    Text = text
+                });
             }
         }
 
@@ -93,61 +126,86 @@ public sealed partial class RoleDetectionService(
         try
         {
             var endpoint = configuration.AzureOpenAiEndpoint.TrimEnd('/');
-            var deployment = Uri.EscapeDataString(configuration.AzureOpenAiDeployment);
-            var url = $"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={configuration.AzureOpenAiApiVersion}";
+
+            /*
+             Your Azure AI Foundry endpoint already looks like:
+             https://...services.ai.azure.com/openai/v1
+
+             Therefore the Responses API URL is:
+             https://...services.ai.azure.com/openai/v1/responses
+            */
+            var url = $"{endpoint}/responses";
 
             using var request = new HttpRequestMessage(HttpMethod.Post, url);
+
             request.Headers.Add("api-key", configuration.AzureOpenAiKey);
+
             request.Content = JsonContent(new
             {
-                messages = new object[]
+                model = configuration.AzureOpenAiDeployment,
+                input = SystemPrompt + "\n\nTranscript:\n" + chunk.Text,
+                text = new
                 {
-                    new { role = "system", content = SystemPrompt },
-                    new { role = "user", content = chunk.Text }
+                    format = new
+                    {
+                        type = "json_object"
+                    }
                 },
-                max_completion_tokens = 4000,
-                response_format = new { type = "json_object" }
+                max_output_tokens = 400
             });
 
             var client = httpClientFactory.CreateClient();
+
             using var response = await client.SendAsync(request, cancellationToken);
+
+            var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
+
             if (!response.IsSuccessStatusCode)
             {
-                logger.LogWarning("Azure OpenAI role detection failed with status {StatusCode}", response.StatusCode);
-                return ([], $"Azure OpenAI role detection failed for chunk {chunk.Index + 1} with status {(int)response.StatusCode}");
+                logger.LogWarning(
+                    "Azure OpenAI role detection failed with status {StatusCode}. Response: {ResponseText}",
+                    response.StatusCode,
+                    responseText
+                );
+
+                return (
+                    [],
+                    $"Azure OpenAI role detection failed for chunk {chunk.Index + 1} with status {(int)response.StatusCode}"
+                );
             }
 
-            using var document = await JsonDocument.ParseAsync(
-                await response.Content.ReadAsStreamAsync(cancellationToken),
-                cancellationToken: cancellationToken);
-
-            var content = document.RootElement
-                .GetProperty("choices")[0]
-                .GetProperty("message")
-                .GetProperty("content")
-                .GetString();
+            var content = ExtractTextFromResponsesApi(responseText);
 
             if (string.IsNullOrWhiteSpace(content))
             {
-                return ([], $"Azure OpenAI role detection returned empty content for chunk {chunk.Index + 1}");
+                return (
+                    [],
+                    $"Azure OpenAI role detection returned empty content for chunk {chunk.Index + 1}"
+                );
             }
 
             using var roleDocument = JsonDocument.Parse(content);
+
             var turnsElement = roleDocument.RootElement.TryGetProperty("turns", out var turns)
                 ? turns
                 : roleDocument.RootElement;
 
             if (turnsElement.ValueKind != JsonValueKind.Array)
             {
-                return ([], $"Azure OpenAI role detection returned invalid JSON shape for chunk {chunk.Index + 1}");
+                return (
+                    [],
+                    $"Azure OpenAI role detection returned invalid JSON shape for chunk {chunk.Index + 1}"
+                );
             }
 
             var parsed = new List<ConversationTurn>();
+
             foreach (var item in turnsElement.EnumerateArray())
             {
                 var role = item.TryGetProperty("role", out var roleElement)
                     ? roleElement.GetString()
                     : "Unknown";
+
                 var text = item.TryGetProperty("text", out var textElement)
                     ? textElement.GetString()
                     : string.Empty;
@@ -167,13 +225,89 @@ public sealed partial class RoleDetectionService(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Azure OpenAI role detection failed");
-            return ([], $"Azure OpenAI role detection failed for chunk {chunk.Index + 1}: {ex.Message}");
+
+            return (
+                [],
+                $"Azure OpenAI role detection failed for chunk {chunk.Index + 1}: {ex.Message}"
+            );
         }
+    }
+
+    private static string? ExtractTextFromResponsesApi(string responseText)
+    {
+        using var document = JsonDocument.Parse(responseText);
+        var root = document.RootElement;
+
+        /*
+         Some Responses API responses include output_text directly.
+        */
+        if (root.TryGetProperty("output_text", out var outputTextElement)
+            && outputTextElement.ValueKind == JsonValueKind.String)
+        {
+            return outputTextElement.GetString();
+        }
+
+        /*
+         Standard Responses API shape:
+         {
+           "output": [
+             {
+               "content": [
+                 {
+                   "type": "output_text",
+                   "text": "..."
+                 }
+               ]
+             }
+           ]
+         }
+        */
+        if (root.TryGetProperty("output", out var outputElement)
+            && outputElement.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var outputItem in outputElement.EnumerateArray())
+            {
+                if (!outputItem.TryGetProperty("content", out var contentElement)
+                    || contentElement.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                foreach (var contentItem in contentElement.EnumerateArray())
+                {
+                    if (contentItem.TryGetProperty("text", out var textElement)
+                        && textElement.ValueKind == JsonValueKind.String)
+                    {
+                        return textElement.GetString();
+                    }
+                }
+            }
+        }
+
+        /*
+         Fallback for old Chat Completions shape, in case endpoint is changed later.
+        */
+        if (root.TryGetProperty("choices", out var choicesElement)
+            && choicesElement.ValueKind == JsonValueKind.Array
+            && choicesElement.GetArrayLength() > 0)
+        {
+            var firstChoice = choicesElement[0];
+
+            if (firstChoice.TryGetProperty("message", out var messageElement)
+                && messageElement.TryGetProperty("content", out var contentElement)
+                && contentElement.ValueKind == JsonValueKind.String)
+            {
+                return contentElement.GetString();
+            }
+        }
+
+        return null;
     }
 
     private static IReadOnlyList<ConversationTurn> SpeakerFallback(string transcript)
     {
         var parts = SplitCandidateTurns(transcript).ToList();
+
         if (parts.Count == 0)
         {
             parts = SentenceRegex().Split(transcript)
@@ -197,9 +331,11 @@ public sealed partial class RoleDetectionService(
     private static IReadOnlyList<ConversationTurn> DeduplicateAdjacentTurns(IEnumerable<ConversationTurn> turns)
     {
         var deduped = new List<ConversationTurn>();
+
         foreach (var turn in turns)
         {
             var previous = deduped.LastOrDefault();
+
             if (previous is not null
                 && previous.Role == turn.Role
                 && string.Equals(previous.Text, turn.Text, StringComparison.Ordinal))
@@ -233,20 +369,29 @@ public sealed partial class RoleDetectionService(
     private static string NormalizeExplicitRole(string label)
     {
         var normalized = label.Trim().ToLowerInvariant();
+
         return normalized switch
         {
             "agent" or "representative" or "rep" or "support" or "operator" => "Agent",
             "գործակալ" or "օպերատոր" => "Agent",
-            "caller" or "customer" => "Caller",
+
+            "caller" or "customer" or "client" or "patient" => "Caller",
             "զանգահարող" or "հաճախորդ" => "Caller",
+
             _ => "Speaker 1"
         };
     }
 
-    private static StringContent JsonContent(object value) =>
-        new(JsonSerializer.Serialize(value), Encoding.UTF8, "application/json");
+    private static StringContent JsonContent(object value)
+    {
+        return new StringContent(
+            JsonSerializer.Serialize(value),
+            Encoding.UTF8,
+            "application/json"
+        );
+    }
 
-    [GeneratedRegex(@"^(agent|caller|customer|representative|rep|support|operator|Գործակալ|Զանգահարող|Հաճախորդ|Օպերատոր)\s*[:\-]\s*", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^(agent|caller|customer|client|patient|representative|rep|support|operator|Գործակալ|Զանգահարող|Հաճախորդ|Օպերատոր)\s*[:\-]\s*", RegexOptions.IgnoreCase)]
     private static partial Regex ExplicitLabelRegex();
 
     [GeneratedRegex(@"(?<=[.!?։])\s+")]
