@@ -10,7 +10,7 @@ export async function analyzeTranscript(transcript, language = "auto") {
   const response = await fetch(`${BASE_URL}/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ transcript, transcriptText: transcript, language }),
+    body: JSON.stringify({ language, transcriptText: transcript }),
   });
 
   if (!response.ok) {

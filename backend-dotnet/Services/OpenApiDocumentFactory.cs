@@ -41,11 +41,11 @@ public static class OpenApiDocumentFactory
                                 schema = new
                                 {
                                     type = "object",
+                                    required = new[] { "transcriptText" },
                                     properties = new Dictionary<string, object>
                                     {
-                                        ["transcript"] = new { type = "string" },
-                                        ["transcriptText"] = new { type = "string" },
-                                        ["language"] = new { type = "string", example = "en" }
+                                        ["language"] = new { type = "string", example = "en" },
+                                        ["transcriptText"] = new { type = "string", example = "Agent: Hello.\\nCaller: My name is John Smith." }
                                     }
                                 }
                             }
