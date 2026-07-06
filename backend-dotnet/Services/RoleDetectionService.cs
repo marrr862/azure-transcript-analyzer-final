@@ -1,3 +1,6 @@
+using Azure.Core;
+using Azure.Identity;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -11,32 +14,25 @@ public sealed partial class RoleDetectionService(
     ILogger<RoleDetectionService> logger)
 {
     private const string SystemPrompt = """
-        You are a call-center transcript analyzer.
+    You are a call-center transcript analyzer.
 
-        Task:
-        Split the transcript into conversation turns.
+    Split the transcript into conversation turns.
 
-        Allowed roles:
-        - Agent
-        - Caller
-        - Unknown
+    Allowed roles:
+    - Agent
+    - Caller
+    - Unknown
 
-        Rules:
-        - Use Agent for a support representative, operator, company employee, or service worker.
-        - Use Caller for the customer, client, patient, or person asking for help.
-        - Use Unknown only if the role is not clear.
-        - Preserve original wording and original language.
-        - Do not invent information.
-        - Return only valid JSON.
+    Return only valid minified JSON.
+    Do not use markdown.
+    Do not add explanations.
+    Do not wrap JSON in ```json.
+    Do not cut the JSON.
+    Preserve original wording and original language.
 
-        Required JSON format:
-        {
-          "turns": [
-            { "role": "Agent", "text": "..." },
-            { "role": "Caller", "text": "..." }
-          ]
-        }
-        """;
+    Required JSON format:
+    {"turns":[{"role":"Agent","text":"..."},{"role":"Caller","text":"..."}]}
+    """;
 
     public async Task<(IReadOnlyList<ConversationTurn> Turns, string Method, IReadOnlyList<string> Warnings)> DetectAsync(
         string transcript,
@@ -127,18 +123,26 @@ public sealed partial class RoleDetectionService(
         {
             var endpoint = configuration.AzureOpenAiEndpoint.TrimEnd('/');
 
-            /*
-             Your Azure AI Foundry endpoint already looks like:
-             https://...services.ai.azure.com/openai/v1
-
-             Therefore the Responses API URL is:
-             https://...services.ai.azure.com/openai/v1/responses
-            */
+            // For Azure AI Foundry endpoint:
+            // https://...services.ai.azure.com/openai/v1
             var url = $"{endpoint}/responses";
 
             using var request = new HttpRequestMessage(HttpMethod.Post, url);
 
-            request.Headers.Add("api-key", configuration.AzureOpenAiKey);
+            /*
+             Your Azure AI Foundry sample uses DefaultAzureCredential,
+             so this backend uses Bearer token authentication instead of api-key.
+             Before running backend, run:
+             az login
+            */
+            var credential = new DefaultAzureCredential();
+
+            var token = await credential.GetTokenAsync(
+                new TokenRequestContext(["https://ai.azure.com/.default"]),
+                cancellationToken
+            );
+
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
 
             request.Content = JsonContent(new
             {
@@ -151,7 +155,7 @@ public sealed partial class RoleDetectionService(
                         type = "json_object"
                     }
                 },
-                max_output_tokens = 400
+                max_output_tokens = 1200 
             });
 
             var client = httpClientFactory.CreateClient();
@@ -175,13 +179,14 @@ public sealed partial class RoleDetectionService(
             }
 
             var content = ExtractTextFromResponsesApi(responseText);
+            logger.LogInformation("Azure OpenAI role detection content: {Content}", content);
 
             if (string.IsNullOrWhiteSpace(content))
             {
-                return (
-                    [],
-                    $"Azure OpenAI role detection returned empty content for chunk {chunk.Index + 1}"
-                );
+                 return (
+                     [],
+                     $"Azure OpenAI role detection returned empty content for chunk {chunk.Index + 1}"
+                 );
             }
 
             using var roleDocument = JsonDocument.Parse(content);
@@ -238,9 +243,7 @@ public sealed partial class RoleDetectionService(
         using var document = JsonDocument.Parse(responseText);
         var root = document.RootElement;
 
-        /*
-         Some Responses API responses include output_text directly.
-        */
+        // Some Responses API responses include output_text directly.
         if (root.TryGetProperty("output_text", out var outputTextElement)
             && outputTextElement.ValueKind == JsonValueKind.String)
         {
@@ -284,9 +287,7 @@ public sealed partial class RoleDetectionService(
             }
         }
 
-        /*
-         Fallback for old Chat Completions shape, in case endpoint is changed later.
-        */
+        // Fallback for old Chat Completions shape.
         if (root.TryGetProperty("choices", out var choicesElement)
             && choicesElement.ValueKind == JsonValueKind.Array
             && choicesElement.GetArrayLength() > 0)

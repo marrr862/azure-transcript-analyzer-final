@@ -8,4 +8,8 @@
     <UserSecretsId>a49fb29a-50bd-49ff-ba2a-d818d7a55d87</UserSecretsId>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+  </ItemGroup>
+
 </Project>
