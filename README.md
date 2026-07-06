@@ -66,12 +66,12 @@ http://localhost:5173
 
 ## API Request Format
 
-The .NET backend accepts both `transcript` and `transcriptText`:
+The .NET backend accepts `language` and `transcriptText`:
 
 ```json
 {
   "language": "en",
-  "transcript": "Agent: Hello, how can I help?\nCaller: My name is John Smith."
+  "transcriptText": "Agent: Hello, how can I help?\nCaller: My name is John Smith."
 }
 ```
 
@@ -81,6 +81,8 @@ The .NET backend accepts both `transcript` and `transcriptText`:
   "transcriptText": "Գործակալ: Բարև ձեզ։\nԶանգահարող: Իմ անունը Արա Պետրոսյան է։"
 }
 ```
+
+`transcriptText` may contain real newlines or escaped literal newline text such as `\\n`; the backend normalizes both before analysis.
 
 ## API Response Shape
 
@@ -115,7 +117,7 @@ English:
 ```bash
 curl -X POST http://localhost:8000/analyze \
   -H "Content-Type: application/json" \
-  -d '{"language":"en","transcript":"Agent: Hello, how can I help you?\nCaller: My name is John Smith. My phone number is 555-867-5309 and my email is john.smith@example.com. I live at 123 Main Street. My SSN is 123-45-6789."}'
+  -d '{"language":"en","transcriptText":"Agent: Hello, how can I help you?\nCaller: My name is John Smith. My phone number is 555-867-5309 and my email is john.smith@example.com. I live at 123 Main Street. My SSN is 123-45-6789."}'
 ```
 
 Armenian:
@@ -131,5 +133,13 @@ Empty transcript validation:
 ```bash
 curl -i -X POST http://localhost:8000/analyze \
   -H "Content-Type: application/json" \
-  -d '{"language":"en","transcript":""}'
+  -d '{"language":"en","transcriptText":""}'
+```
+
+Escaped newline normalization:
+
+```bash
+curl -X POST http://localhost:8000/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"language":"en","transcriptText":"Agent: Hello.\\nCaller: My name is John Smith."}'
 ```

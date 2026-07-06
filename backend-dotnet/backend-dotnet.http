@@ -10,7 +10,7 @@ Content-Type: application/json
 
 {
   "language": "en",
-  "transcript": "Agent: Hello, how can I help you?\nCaller: My name is John Smith. My phone number is 555-867-5309 and my email is john.smith@example.com."
+  "transcriptText": "Agent: Hello, how can I help you?\nCaller: My name is John Smith. My phone number is 555-867-5309 and my email is john.smith@example.com."
 }
 
 ###

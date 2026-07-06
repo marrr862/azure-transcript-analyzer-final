@@ -16,6 +16,12 @@ OpenAPI is available in development at:
 http://localhost:8000/openapi/v1.json
 ```
 
+Interactive Swagger UI is available at:
+
+```text
+http://localhost:8000/swagger
+```
+
 ## Configuration
 
 Use environment variables, .NET user secrets, or local appsettings overrides. Do not commit real keys.
@@ -29,6 +35,16 @@ export AZURE_OPENAI_DEPLOYMENT="<your-deployment-name>"
 ```
 
 Azure Language is used for PII/entity extraction. Azure OpenAI is used for role detection only when no explicit Agent/Caller labels exist and the service is configured. Regex and Speaker 1/Speaker 2 fallbacks keep the API usable without Azure services.
+
+## Analyze Request
+
+```bash
+curl -X POST http://localhost:8000/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"language":"en","transcriptText":"Agent: Hello.\nCaller: My name is John Smith."}'
+```
+
+`transcriptText` may contain real newlines or escaped literal newline text such as `\\n`; the backend normalizes both before analysis.
 
 ## Long Transcripts
 
