@@ -99,11 +99,14 @@ app.MapPost("/analyze", async (
     TranscriptAnalysisService analyzer,
     CancellationToken cancellationToken) =>
 {
-    var transcriptText = request.TranscriptText;
-    if (string.IsNullOrWhiteSpace(transcriptText))
-    {
-        return Results.BadRequest(new { detail = "transcriptText must not be empty" });
-    }
+ var transcriptText = !string.IsNullOrWhiteSpace(request.TranscriptText)
+     ? request.TranscriptText
+     : request.Transcript;
+
+if (string.IsNullOrWhiteSpace(transcriptText))
+{
+    return Results.BadRequest(new { detail = "transcript or transcriptText must not be empty" });
+}
 
     var normalizedTranscriptText = NormalizeTranscriptNewlines(transcriptText);
 
