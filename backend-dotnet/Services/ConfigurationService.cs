@@ -26,12 +26,14 @@ public sealed class ConfigurationService(IConfiguration configuration)
     public int TranscriptChunkOverlap =>
         ReadInt("TranscriptChunking:Overlap", "TRANSCRIPT_CHUNK_OVERLAP", 200);
 
+    public int MaxParallelAiCalls =>
+        Math.Clamp(ReadInt("Processing:MaxParallelAiCalls", "MAX_PARALLEL_AI_CALLS", 3), 1, 8);
+
     public bool AzureLanguageConfigured =>
         LooksConfigured(AzureLanguageEndpoint) && LooksConfigured(AzureLanguageKey);
 
     public bool AzureOpenAiConfigured =>
         LooksConfigured(AzureOpenAiEndpoint)
-        && LooksConfigured(AzureOpenAiKey)
         && LooksConfigured(AzureOpenAiDeployment);
 
     private string Read(string configKey, string environmentKey, string fallback = "")

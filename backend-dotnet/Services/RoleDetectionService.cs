@@ -11,12 +11,19 @@ namespace TranscriptAnalyzer.Services;
 public sealed partial class RoleDetectionService(
     IHttpClientFactory httpClientFactory,
     ConfigurationService configuration,
+    AiConcurrencyLimiter aiConcurrencyLimiter,
     ILogger<RoleDetectionService> logger)
 {
-    private const string SystemPrompt = """
+    private const int MaxRoleSegmentsPerRequest = 50;
+
+    private const string RoleClassificationPrompt = """
     You are a call-center transcript analyzer.
 
-    Split the transcript into conversation turns.
+    Assign a speaker role to each numbered transcript segment.
+
+    Prefer the spoken intent over the previous visible label.
+    Agent segments often ask verification or service questions, confirm actions, summarize a request, or say phrases like "I will add", "I will update", "I will create", "Would you like me", "Understood", or "Thank you for the call".
+    Caller segments often provide personal facts, answer verification, make requests, correct details, or say phrases like "please", "can you", "I do not want", "yes please", or "everything is correct".
 
     Allowed roles:
     - Agent
@@ -27,11 +34,21 @@ public sealed partial class RoleDetectionService(
     Do not use markdown.
     Do not add explanations.
     Do not wrap JSON in ```json.
-    Do not cut the JSON.
-    Preserve original wording and original language.
+    Include one role object for every input segment id.
 
     Required JSON format:
-    {"turns":[{"role":"Agent","text":"..."},{"role":"Caller","text":"..."}]}
+    {"roles":[{"id":0,"role":"Agent"},{"id":1,"role":"Caller"}]}
+    """;
+
+    private const string RoleClassificationRetryPrompt = """
+    Your previous role-classification response was not valid complete JSON.
+
+    Return one complete minified JSON object only.
+    Do not include transcript text, markdown, comments, or explanations.
+    Include one role object for every input segment id.
+
+    Required JSON format:
+    {"roles":[{"id":0,"role":"Agent"},{"id":1,"role":"Caller"}]}
     """;
 
     public async Task<(IReadOnlyList<ConversationTurn> Turns, string Method, IReadOnlyList<string> Warnings)> DetectAsync(
@@ -41,20 +58,52 @@ public sealed partial class RoleDetectionService(
     {
         if (ContainsExplicitLabels(transcript))
         {
-            return (ParseExplicitLabels(transcript), "labels", []);
+            var labeledTurns = ParseExplicitLabels(transcript);
+            if (!configuration.AzureOpenAiConfigured)
+            {
+                var cueRefinedTurns = RefineTurnsWithEmbeddedCues(labeledTurns);
+                return (
+                    DeduplicateAdjacentTurns(cueRefinedTurns),
+                    HasTurnChanges(labeledTurns, cueRefinedTurns) ? "labels+heuristic" : "labels",
+                    []);
+            }
+
+            var (refinedTurns, refined) = await RefineExplicitLabelTurnsAsync(
+                labeledTurns,
+                cancellationToken);
+
+            return (
+                DeduplicateAdjacentTurns(refinedTurns),
+                refined ? "labels+openai" : "labels",
+                []);
         }
 
         if (configuration.AzureOpenAiConfigured)
         {
             var openAiTurns = new List<ConversationTurn>();
             var warnings = new List<string>();
+            var results = await RunWithBoundedParallelismAsync(
+                chunks,
+                configuration.MaxParallelAiCalls,
+                chunk => TryDetectChunkWithOpenAiAsync(chunk, cancellationToken),
+                cancellationToken);
 
-            foreach (var chunk in chunks)
+            foreach (var (chunk, result) in chunks.Zip(results))
             {
-                var (chunkTurns, chunkWarning) = await TryDetectChunkWithOpenAiAsync(chunk, cancellationToken);
+                var (chunkTurns, chunkWarning) = result;
 
-                if (chunkTurns.Count > 0 && chunkTurns.All(turn => turn.Role is "Agent" or "Caller"))
+                if (chunkTurns.Count > 0)
                 {
+                    if (!string.IsNullOrWhiteSpace(chunkWarning))
+                    {
+                        warnings.Add(chunkWarning);
+                    }
+
+                    if (chunkTurns.Any(turn => turn.Role == "Unknown"))
+                    {
+                        warnings.Add($"Azure OpenAI role detection was uncertain for part of chunk {chunk.Index + 1}");
+                    }
+
                     openAiTurns.AddRange(chunkTurns);
                     continue;
                 }
@@ -76,26 +125,267 @@ public sealed partial class RoleDetectionService(
         return (SpeakerFallback(transcript), "fallback", []);
     }
 
+    private async Task<(IReadOnlyList<ConversationTurn> Turns, bool Refined)> RefineExplicitLabelTurnsAsync(
+        IReadOnlyList<ConversationTurn> turns,
+        CancellationToken cancellationToken)
+    {
+        var refinedTurns = new List<ConversationTurn>();
+        var refined = false;
+
+        for (var i = 0; i < turns.Count; i++)
+        {
+            var turn = turns[i];
+            if (!ShouldRefineLabeledTurn(turn))
+            {
+                refinedTurns.Add(turn);
+                continue;
+            }
+
+            var (detectedTurns, warning) = await TryDetectChunkWithOpenAiAsync(
+                new TranscriptChunk
+                {
+                    Index = i,
+                    Start = 0,
+                    End = turn.Text.Length,
+                    Text = turn.Text
+                },
+                cancellationToken);
+
+            if (detectedTurns.Count > 0 && string.IsNullOrWhiteSpace(warning))
+            {
+                var normalized = detectedTurns
+                    .Select(detected => new ConversationTurn
+                    {
+                        Role = detected.Role == "Unknown" ? turn.Role : detected.Role,
+                        Text = detected.Text
+                    })
+                    .ToList();
+
+                var cueRefined = RefineTurnsWithEmbeddedCues(normalized);
+                if (HasRoleSwitch(cueRefined))
+                {
+                    refinedTurns.AddRange(cueRefined);
+                    refined = true;
+                    continue;
+                }
+            }
+
+            var heuristicRefined = RefineTurnWithEmbeddedCues(turn);
+            if (HasRoleSwitch(heuristicRefined))
+            {
+                refinedTurns.AddRange(heuristicRefined);
+                refined = true;
+                continue;
+            }
+
+            refinedTurns.Add(turn);
+        }
+
+        return (MergeAdjacentSameRole(refinedTurns), refined);
+    }
+
+    private static async Task<TResult[]> RunWithBoundedParallelismAsync<TItem, TResult>(
+        IReadOnlyList<TItem> items,
+        int maxParallelism,
+        Func<TItem, Task<TResult>> work,
+        CancellationToken cancellationToken)
+    {
+        var results = new TResult[items.Count];
+        using var semaphore = new SemaphoreSlim(maxParallelism);
+
+        var tasks = items.Select(async (item, index) =>
+        {
+            await semaphore.WaitAsync(cancellationToken);
+            try
+            {
+                results[index] = await work(item);
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        });
+
+        await Task.WhenAll(tasks);
+        return results;
+    }
+
     private static bool ContainsExplicitLabels(string transcript)
     {
-        return SplitCandidateTurns(transcript).Any(line => ExplicitLabelRegex().IsMatch(line));
+        return ExplicitLabelRegex().IsMatch(transcript);
+    }
+
+    private static bool ShouldRefineLabeledTurn(ConversationTurn turn)
+    {
+        if (turn.Text.Length >= 450)
+        {
+            return true;
+        }
+
+        var sentenceCount = SentenceRegex().Split(turn.Text)
+            .Count(part => !string.IsNullOrWhiteSpace(part));
+
+        return sentenceCount >= 5 || EmbeddedSpeakerCueRegex().IsMatch(turn.Text);
+    }
+
+    private static IReadOnlyList<ConversationTurn> RefineTurnsWithEmbeddedCues(IEnumerable<ConversationTurn> turns)
+    {
+        var refined = new List<ConversationTurn>();
+
+        foreach (var turn in turns)
+        {
+            if (!ShouldRefineLabeledTurn(turn))
+            {
+                refined.Add(turn);
+                continue;
+            }
+
+            var cueTurns = RefineTurnWithEmbeddedCues(turn);
+            refined.AddRange(HasRoleSwitch(cueTurns) ? cueTurns : [turn]);
+        }
+
+        return MergeAdjacentSameRole(refined);
+    }
+
+    private static IReadOnlyList<ConversationTurn> RefineTurnWithEmbeddedCues(ConversationTurn turn)
+    {
+        var sentences = SplitRoleCandidate(turn.Text, forceSentenceSplit: true)
+            .Select(sentence => sentence.Trim())
+            .Where(sentence => !string.IsNullOrWhiteSpace(sentence))
+            .ToList();
+
+        if (sentences.Count < 2)
+        {
+            return [turn];
+        }
+
+        var currentRole = turn.Role is "Agent" or "Caller" ? turn.Role : "Caller";
+        string? previousSentence = null;
+        var refined = new List<ConversationTurn>();
+
+        foreach (var sentence in sentences)
+        {
+            var inferredRole = InferRoleFromCue(sentence, previousSentence, currentRole);
+            var role = inferredRole ?? currentRole;
+
+            AddOrMergeTurn(refined, role, sentence);
+
+            currentRole = role;
+            previousSentence = sentence;
+        }
+
+        return HasRoleSwitch(refined) ? refined : [turn];
+    }
+
+    private static string? InferRoleFromCue(string sentence, string? previousSentence, string currentRole)
+    {
+        var text = sentence.Trim();
+
+        if (AgentCueRegex().IsMatch(text))
+        {
+            return "Agent";
+        }
+
+        if (CallerCueRegex().IsMatch(text))
+        {
+            return "Caller";
+        }
+
+        var normalized = text.Trim().TrimEnd('.', '!', '?', '։');
+        if (string.Equals(normalized, "yes", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(previousSentence)
+            && previousSentence.TrimEnd().EndsWith("?", StringComparison.Ordinal))
+        {
+            return currentRole == "Agent" ? "Caller" : "Agent";
+        }
+
+        return null;
+    }
+
+    private static void AddOrMergeTurn(List<ConversationTurn> turns, string role, string text)
+    {
+        var previous = turns.LastOrDefault();
+        if (previous is not null && previous.Role == role)
+        {
+            turns[^1] = new ConversationTurn
+            {
+                Role = previous.Role,
+                Text = $"{previous.Text} {text}"
+            };
+            return;
+        }
+
+        turns.Add(new ConversationTurn
+        {
+            Role = role,
+            Text = text
+        });
+    }
+
+    private static bool HasRoleSwitch(IEnumerable<ConversationTurn> turns)
+    {
+        return turns
+            .Select(turn => turn.Role)
+            .Where(role => role is "Agent" or "Caller")
+            .Distinct(StringComparer.Ordinal)
+            .Count() > 1;
+    }
+
+    private static bool HasTurnChanges(IReadOnlyList<ConversationTurn> before, IReadOnlyList<ConversationTurn> after)
+    {
+        if (before.Count != after.Count)
+        {
+            return true;
+        }
+
+        return before.Zip(after).Any(pair =>
+            !string.Equals(pair.First.Role, pair.Second.Role, StringComparison.Ordinal)
+            || !string.Equals(pair.First.Text, pair.Second.Text, StringComparison.Ordinal));
+    }
+
+    private static IReadOnlyList<RoleSegment> BuildRoleSegments(string transcript)
+    {
+        var baseCandidates = SplitCandidateTurns(transcript).ToList();
+        var shouldSplitSentences = baseCandidates.Count <= 1;
+        var candidates = baseCandidates
+            .SelectMany(text => SplitRoleCandidate(text, shouldSplitSentences))
+            .Select(text => text.Trim())
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Take(300)
+            .ToList();
+
+        return candidates
+            .Select((text, index) => new RoleSegment(index, text))
+            .ToList();
+    }
+
+    private static IEnumerable<string> SplitRoleCandidate(string text, bool forceSentenceSplit)
+    {
+        if (!forceSentenceSplit && text.Length <= 700)
+        {
+            return [text];
+        }
+
+        var sentences = SentenceRegex().Split(text)
+            .Select(part => part.Trim())
+            .Where(part => !string.IsNullOrWhiteSpace(part))
+            .ToList();
+
+        return sentences.Count > 1 ? sentences : [text];
     }
 
     private static IReadOnlyList<ConversationTurn> ParseExplicitLabels(string transcript)
     {
         var turns = new List<ConversationTurn>();
+        var matches = ExplicitLabelRegex().Matches(transcript);
 
-        foreach (var line in SplitCandidateTurns(transcript))
+        for (var i = 0; i < matches.Count; i++)
         {
-            var match = ExplicitLabelRegex().Match(line);
-
-            if (!match.Success)
-            {
-                continue;
-            }
-
+            var match = matches[i];
             var role = NormalizeExplicitRole(match.Groups[1].Value);
-            var text = ExplicitLabelRegex().Replace(line, "").Trim();
+            var textStart = match.Index + match.Length;
+            var textEnd = i + 1 < matches.Count ? matches[i + 1].Index : transcript.Length;
+            var text = transcript[textStart..textEnd].Trim();
 
             if (!string.IsNullOrWhiteSpace(text))
             {
@@ -121,111 +411,36 @@ public sealed partial class RoleDetectionService(
 
         try
         {
-            var endpoint = configuration.AzureOpenAiEndpoint.TrimEnd('/');
-
-            // For Azure AI Foundry endpoint:
-            // https://...services.ai.azure.com/openai/v1
-            var url = $"{endpoint}/responses";
-
-            using var request = new HttpRequestMessage(HttpMethod.Post, url);
-
-            /*
-             Your Azure AI Foundry sample uses DefaultAzureCredential,
-             so this backend uses Bearer token authentication instead of api-key.
-             Before running backend, run:
-             az login
-            */
-            var credential = new DefaultAzureCredential();
-
-            var token = await credential.GetTokenAsync(
-                new TokenRequestContext(["https://ai.azure.com/.default"]),
-                cancellationToken
-            );
-
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
-
-            request.Content = JsonContent(new
+            var segments = BuildRoleSegments(chunk.Text);
+            if (segments.Count == 0)
             {
-                model = configuration.AzureOpenAiDeployment,
-                input = SystemPrompt + "\n\nTranscript:\n" + chunk.Text,
-                text = new
-                {
-                    format = new
-                    {
-                        type = "json_object"
-                    }
-                },
-                max_output_tokens = 1200 
-            });
-
-            var client = httpClientFactory.CreateClient();
-
-            using var response = await client.SendAsync(request, cancellationToken);
-
-            var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                logger.LogWarning(
-                    "Azure OpenAI role detection failed with status {StatusCode}. Response: {ResponseText}",
-                    response.StatusCode,
-                    responseText
-                );
-
-                return (
-                    [],
-                    $"Azure OpenAI role detection failed for chunk {chunk.Index + 1} with status {(int)response.StatusCode}"
-                );
-            }
-
-            var content = ExtractTextFromResponsesApi(responseText);
-            logger.LogInformation("Azure OpenAI role detection content: {Content}", content);
-
-            if (string.IsNullOrWhiteSpace(content))
-            {
-                 return (
-                     [],
-                     $"Azure OpenAI role detection returned empty content for chunk {chunk.Index + 1}"
-                 );
-            }
-
-            using var roleDocument = JsonDocument.Parse(content);
-
-            var turnsElement = roleDocument.RootElement.TryGetProperty("turns", out var turns)
-                ? turns
-                : roleDocument.RootElement;
-
-            if (turnsElement.ValueKind != JsonValueKind.Array)
-            {
-                return (
-                    [],
-                    $"Azure OpenAI role detection returned invalid JSON shape for chunk {chunk.Index + 1}"
-                );
+                return ([], $"No role-detection segments found for chunk {chunk.Index + 1}");
             }
 
             var parsed = new List<ConversationTurn>();
+            var warnings = new List<string>();
 
-            foreach (var item in turnsElement.EnumerateArray())
+            foreach (var batch in segments.Chunk(MaxRoleSegmentsPerRequest))
             {
-                var role = item.TryGetProperty("role", out var roleElement)
-                    ? roleElement.GetString()
-                    : "Unknown";
+                var batchSegments = batch.ToList();
+                var (batchTurns, batchWarning) = await TryDetectRoleBatchAsync(
+                    chunk.Index,
+                    batchSegments,
+                    cancellationToken);
 
-                var text = item.TryGetProperty("text", out var textElement)
-                    ? textElement.GetString()
-                    : string.Empty;
-
-                if (!string.IsNullOrWhiteSpace(text))
+                if (!string.IsNullOrWhiteSpace(batchWarning))
                 {
-                    parsed.Add(new ConversationTurn
-                    {
-                        Role = role is "Agent" or "Caller" ? role : "Unknown",
-                        Text = text.Trim()
-                    });
+                    warnings.Add(batchWarning);
                 }
+
+                parsed.AddRange(batchTurns.Count > 0
+                    ? batchTurns
+                    : RoleFallback(batchSegments, parsed.LastOrDefault()?.Role));
             }
 
-            return (parsed, null);
+            return (
+                MergeAdjacentSameRole(parsed),
+                warnings.Count > 0 ? string.Join("; ", warnings.Distinct(StringComparer.OrdinalIgnoreCase)) : null);
         }
         catch (Exception ex)
         {
@@ -233,8 +448,173 @@ public sealed partial class RoleDetectionService(
 
             return (
                 [],
-                $"Azure OpenAI role detection failed for chunk {chunk.Index + 1}: {ex.Message}"
+                $"Speaker split used fallback for chunk {chunk.Index + 1}"
             );
+        }
+    }
+
+    private async Task<(IReadOnlyList<ConversationTurn> Turns, string? Warning)> TryDetectRoleBatchAsync(
+        int chunkIndex,
+        IReadOnlyList<RoleSegment> segments,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var content = await SendRoleDetectionRequestAsync(
+                RoleClassificationPrompt,
+                segments,
+                Math.Max(1000, Math.Min(3500, segments.Count * 70)),
+                cancellationToken);
+
+            if (!TryParseRoleDocument(content, out var roleDocument, out var parseError))
+            {
+                logger.LogWarning(
+                    "Azure OpenAI role detection returned invalid JSON for chunk {Chunk}. Retrying. Parse error: {ParseError}",
+                    chunkIndex + 1,
+                    parseError);
+
+                var retryContent = await SendRoleDetectionRequestAsync(
+                    RoleClassificationRetryPrompt,
+                    segments,
+                    Math.Max(1500, Math.Min(4500, segments.Count * 90)),
+                    cancellationToken);
+
+                if (!TryParseRoleDocument(retryContent, out roleDocument, out parseError))
+                {
+                    logger.LogWarning(
+                        "Azure OpenAI role detection retry returned invalid JSON for chunk {Chunk}. Parse error: {ParseError}",
+                        chunkIndex + 1,
+                        parseError);
+
+                    return (
+                        [],
+                        $"Speaker split used fallback for part of chunk {chunkIndex + 1}");
+                }
+            }
+
+            using (roleDocument)
+            {
+                if (!roleDocument.RootElement.TryGetProperty("roles", out var rolesElement)
+                    || rolesElement.ValueKind != JsonValueKind.Array)
+                {
+                    return (
+                        [],
+                        $"Speaker split used fallback for part of chunk {chunkIndex + 1}"
+                    );
+                }
+
+                var rolesById = new Dictionary<int, string>();
+
+                foreach (var item in rolesElement.EnumerateArray())
+                {
+                    if (!item.TryGetProperty("id", out var idElement)
+                        || !idElement.TryGetInt32(out var id))
+                    {
+                        continue;
+                    }
+
+                    var role = item.TryGetProperty("role", out var roleElement)
+                        ? roleElement.GetString()
+                        : "Unknown";
+
+                    rolesById[id] = role is "Agent" or "Caller" ? role : "Unknown";
+                }
+
+                var parsed = segments
+                    .Select(segment => new ConversationTurn
+                    {
+                        Role = rolesById.TryGetValue(segment.Id, out var role) ? role : "Unknown",
+                        Text = segment.Text
+                    })
+                    .Where(turn => !string.IsNullOrWhiteSpace(turn.Text))
+                    .ToList();
+
+                return (MergeAdjacentSameRole(parsed), null);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Azure OpenAI role detection failed");
+
+            return (
+                [],
+                $"Speaker split used fallback for part of chunk {chunkIndex + 1}"
+            );
+        }
+    }
+
+    private async Task<string> SendRoleDetectionRequestAsync(
+        string prompt,
+        IReadOnlyList<RoleSegment> segments,
+        int maxOutputTokens,
+        CancellationToken cancellationToken)
+    {
+        var endpoint = configuration.AzureOpenAiEndpoint.TrimEnd('/');
+        var url = $"{endpoint}/responses";
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        await ApplyAuthorizationAsync(request, cancellationToken);
+
+        request.Content = JsonContent(new
+        {
+            model = configuration.AzureOpenAiDeployment,
+            input = prompt + "\n\nSegments JSON:\n" + JsonSerializer.Serialize(segments),
+            text = new
+            {
+                format = new
+                {
+                    type = "json_object"
+                }
+            },
+            max_output_tokens = maxOutputTokens
+        });
+
+        var client = httpClientFactory.CreateClient();
+
+        using var response = await aiConcurrencyLimiter.RunAsync(
+            "Azure OpenAI role detection",
+            token => client.SendAsync(request, token),
+            cancellationToken);
+
+        var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            logger.LogWarning(
+                "Azure OpenAI role detection failed with status {StatusCode}. Response: {ResponseText}",
+                response.StatusCode,
+                responseText);
+
+            throw new InvalidOperationException($"Azure OpenAI role detection failed with status {(int)response.StatusCode}");
+        }
+
+        var content = ExtractTextFromResponsesApi(responseText);
+        logger.LogInformation("Azure OpenAI role detection content: {Content}", content);
+
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            throw new InvalidOperationException("Azure OpenAI role detection returned empty content");
+        }
+
+        return content;
+    }
+
+    private static bool TryParseRoleDocument(
+        string content,
+        out JsonDocument roleDocument,
+        out string? parseError)
+    {
+        try
+        {
+            roleDocument = JsonDocument.Parse(content);
+            parseError = null;
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            roleDocument = JsonDocument.Parse("{}");
+            parseError = ex.Message;
+            return false;
         }
     }
 
@@ -305,6 +685,35 @@ public sealed partial class RoleDetectionService(
         return null;
     }
 
+    private async Task ApplyAuthorizationAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        if (ShouldUseApiKeyAuth()
+            && !string.IsNullOrWhiteSpace(configuration.AzureOpenAiKey))
+        {
+            request.Headers.Add("api-key", configuration.AzureOpenAiKey);
+            return;
+        }
+
+        /*
+         Azure AI Foundry endpoints can use DefaultAzureCredential.
+         Before running locally with bearer auth, run: az login
+        */
+        var credential = new DefaultAzureCredential();
+
+        var token = await credential.GetTokenAsync(
+            new TokenRequestContext(["https://ai.azure.com/.default"]),
+            cancellationToken
+        );
+
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+    }
+
+    private bool ShouldUseApiKeyAuth()
+    {
+        var endpoint = configuration.AzureOpenAiEndpoint.Trim().ToLowerInvariant();
+        return endpoint.Contains(".openai.azure.com", StringComparison.Ordinal);
+    }
+
     private static IReadOnlyList<ConversationTurn> SpeakerFallback(string transcript)
     {
         var parts = SplitCandidateTurns(transcript).ToList();
@@ -322,11 +731,52 @@ public sealed partial class RoleDetectionService(
             parts.Add(transcript.Trim());
         }
 
+        var firstRole = InferFallbackStartRole(parts.FirstOrDefault() ?? string.Empty);
+        var secondRole = firstRole == "Agent" ? "Caller" : "Agent";
+
         return parts.Select((text, index) => new ConversationTurn
         {
-            Role = index % 2 == 0 ? "Speaker 1" : "Speaker 2",
+            Role = index % 2 == 0 ? firstRole : secondRole,
             Text = text
         }).ToList();
+    }
+
+    private static string InferFallbackStartRole(string text)
+    {
+        if (AgentCueRegex().IsMatch(text)
+            || Regex.IsMatch(text, @"\b(how can i help|thank you for calling|this is .+ speaking)\b", RegexOptions.IgnoreCase))
+        {
+            return "Agent";
+        }
+
+        if (CallerCueRegex().IsMatch(text)
+            || Regex.IsMatch(text, @"\b(i'?m calling|i am calling|my name is|i would like|i need|i want|my phone|my email|my address|issues? still)\b", RegexOptions.IgnoreCase))
+        {
+            return "Caller";
+        }
+
+        return "Caller";
+    }
+
+    private static IReadOnlyList<ConversationTurn> RoleFallback(
+        IReadOnlyList<RoleSegment> segments,
+        string? previousRole)
+    {
+        var turns = new List<ConversationTurn>();
+        var currentRole = previousRole is "Agent" or "Caller" ? previousRole : "Caller";
+        string? previousText = null;
+
+        foreach (var segment in segments)
+        {
+            var inferredRole = InferRoleFromCue(segment.Text, previousText, currentRole);
+            var role = inferredRole ?? currentRole;
+
+            AddOrMergeTurn(turns, role, segment.Text);
+            currentRole = role;
+            previousText = segment.Text;
+        }
+
+        return turns;
     }
 
     private static IReadOnlyList<ConversationTurn> DeduplicateAdjacentTurns(IEnumerable<ConversationTurn> turns)
@@ -348,6 +798,33 @@ public sealed partial class RoleDetectionService(
         }
 
         return deduped;
+    }
+
+    private static IReadOnlyList<ConversationTurn> MergeAdjacentSameRole(IEnumerable<ConversationTurn> turns)
+    {
+        var merged = new List<ConversationTurn>();
+
+        foreach (var turn in turns)
+        {
+            var previous = merged.LastOrDefault();
+            if (previous is not null && previous.Role == turn.Role)
+            {
+                merged[^1] = new ConversationTurn
+                {
+                    Role = previous.Role,
+                    Text = $"{previous.Text}\n\n{turn.Text}"
+                };
+                continue;
+            }
+
+            merged.Add(new ConversationTurn
+            {
+                Role = turn.Role,
+                Text = turn.Text
+            });
+        }
+
+        return merged;
     }
 
     private static IEnumerable<string> SplitCandidateTurns(string transcript)
@@ -373,10 +850,13 @@ public sealed partial class RoleDetectionService(
 
         return normalized switch
         {
-            "agent" or "representative" or "rep" or "support" or "operator" => "Agent",
+            "agent" or "representative" or "rep" or "support" or "operator" or "assistant"
+                or "advisor" or "specialist" or "nurse" or "doctor" or "clinic" or "staff"
+                or "speaker 1" or "speaker1" => "Agent",
             "գործակալ" or "օպերատոր" => "Agent",
 
-            "caller" or "customer" or "client" or "patient" => "Caller",
+            "caller" or "customer" or "client" or "patient" or "member" or "user"
+                or "speaker 2" or "speaker2" => "Caller",
             "զանգահարող" or "հաճախորդ" => "Caller",
 
             _ => "Speaker 1"
@@ -392,9 +872,20 @@ public sealed partial class RoleDetectionService(
         );
     }
 
-    [GeneratedRegex(@"^(agent|caller|customer|client|patient|representative|rep|support|operator|Գործակալ|Զանգահարող|Հաճախորդ|Օպերատոր)\s*[:\-]\s*", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?<![\p{L}\p{N}])(agent|caller|customer|client|patient|representative|rep|support|operator|assistant|advisor|specialist|nurse|doctor|clinic|staff|member|user|speaker\s*[12]|Գործակալ|Զանգահարող|Հաճախորդ|Օպերատոր)\s*[:\-]\s*", RegexOptions.IgnoreCase)]
     private static partial Regex ExplicitLabelRegex();
 
     [GeneratedRegex(@"(?<=[.!?։])\s+")]
     private static partial Regex SentenceRegex();
+
+    [GeneratedRegex(@"\b(can you confirm|please confirm|i will update|i will add|i can create|i can help|i will note|i will link|i will create|would you like me|understood|thank you[,.]?\s*i will|yes,\s*i can|yes,\s*that is important|okay,\s*i will|please also|good\.)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex EmbeddedSpeakerCueRegex();
+
+    [GeneratedRegex(@"^(for verification,\s*)?(can you confirm|could you confirm|please confirm)\b|^(i'll|i will|i can|i am going to|i'm going to)\s+(add|update|note|create|link|send|request|include|submit|open|escalate|attach|ask|check|make|mark|email|process|review|verify|confirm)\b|^(okay|ok|understood|thank you)[,.\s]+(i'll|i will|i can)\b|^yes[,.]?\s+(that is important|i can|i will)\b|^would you like me\b|^thank you for the call\b|^have a good day\b", RegexOptions.IgnoreCase)]
+    private static partial Regex AgentCueRegex();
+
+    [GeneratedRegex(@"^(please|also please)\b|^(can you|could you)\b|^(sure|yes[,.]?\s+(please|everything|the|my|i|it|there|sure))\b|^(i do not|i don't|i want|i need)\b|^good[.!]?$|^there are also old ticket\b|^ticket\s+[A-Z]+[-\d]\b|^thank you,\s*i\b", RegexOptions.IgnoreCase)]
+    private static partial Regex CallerCueRegex();
+
+    private sealed record RoleSegment(int Id, string Text);
 }

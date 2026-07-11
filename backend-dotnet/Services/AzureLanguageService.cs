@@ -7,6 +7,7 @@ namespace TranscriptAnalyzer.Services;
 public sealed class AzureLanguageService(
     IHttpClientFactory httpClientFactory,
     ConfigurationService configuration,
+    AiConcurrencyLimiter aiConcurrencyLimiter,
     ILogger<AzureLanguageService> logger)
 {
     private static readonly Dictionary<string, string> CategoryMap = new(StringComparer.OrdinalIgnoreCase)
@@ -38,13 +39,18 @@ public sealed class AzureLanguageService(
             return ([], [], ["Azure AI Language is not configured"]);
         }
 
-        var attributes = new List<ExtractedAttributes>();
+        var results = await RunWithBoundedParallelismAsync(
+            chunks,
+            configuration.MaxParallelAiCalls,
+            chunk => AnalyzeChunkAsync(chunk, language, cancellationToken),
+            cancellationToken);
+
+        var attributes = new List<ExtractedAttributes>(results.Length);
         var rawEntities = new List<RawAzureEntity>();
         var warnings = new List<string>();
 
-        foreach (var chunk in chunks)
+        foreach (var (chunkAttributes, chunkRawEntities, chunkWarning) in results)
         {
-            var (chunkAttributes, chunkRawEntities, chunkWarning) = await AnalyzeChunkAsync(chunk, language, cancellationToken);
             attributes.Add(chunkAttributes);
             rawEntities.AddRange(chunkRawEntities);
 
@@ -55,6 +61,32 @@ public sealed class AzureLanguageService(
         }
 
         return (attributes, rawEntities, warnings);
+    }
+
+    private static async Task<TResult[]> RunWithBoundedParallelismAsync<TItem, TResult>(
+        IReadOnlyList<TItem> items,
+        int maxParallelism,
+        Func<TItem, Task<TResult>> work,
+        CancellationToken cancellationToken)
+    {
+        var results = new TResult[items.Count];
+        using var semaphore = new SemaphoreSlim(maxParallelism);
+
+        var tasks = items.Select(async (item, index) =>
+        {
+            await semaphore.WaitAsync(cancellationToken);
+            try
+            {
+                results[index] = await work(item);
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        });
+
+        await Task.WhenAll(tasks);
+        return results;
     }
 
     private async Task<(ExtractedAttributes Attributes, IReadOnlyList<RawAzureEntity> RawEntities, string? Warning)> AnalyzeChunkAsync(
@@ -93,7 +125,10 @@ public sealed class AzureLanguageService(
             });
 
             var client = httpClientFactory.CreateClient();
-            using var response = await client.SendAsync(request, cancellationToken);
+            using var response = await aiConcurrencyLimiter.RunAsync(
+                "Azure Language entity analysis",
+                token => client.SendAsync(request, token),
+                cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 logger.LogWarning("Azure Language failed with status {StatusCode}", response.StatusCode);

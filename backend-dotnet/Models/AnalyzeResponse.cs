@@ -13,9 +13,21 @@ public sealed class AnalyzeResponse
     [JsonPropertyName("rawAzureEntities")]
     public IReadOnlyList<RawAzureEntity> RawAzureEntities { get; init; } = [];
 
+    [JsonPropertyName("attributeEvidence")]
+    public IReadOnlyList<AttributeEvidence> AttributeEvidence { get; init; } = [];
+
     [JsonPropertyName("warning")]
     public string? Warning { get; init; }
 
     [JsonPropertyName("roleMethod")]
     public string RoleMethod { get; init; } = "fallback";
+
+    [JsonPropertyName("detectedLanguage")]
+    public string DetectedLanguage { get; init; } = "auto";
+
+    [JsonPropertyName("translationMethod")]
+    public string TranslationMethod { get; init; } = "none";
+
+    [JsonPropertyName("translatedTranscript")]
+    public string? TranslatedTranscript { get; init; }
 }

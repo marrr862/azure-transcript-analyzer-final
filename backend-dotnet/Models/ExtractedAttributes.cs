@@ -33,4 +33,7 @@ public sealed class ExtractedAttributes
 
     [JsonPropertyName("other")]
     public List<string> Other { get; set; } = [];
+
+    [JsonPropertyName("importantDetails")]
+    public List<string> ImportantDetails { get; set; } = [];
 }

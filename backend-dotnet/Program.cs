@@ -27,11 +27,16 @@ builder.Services.AddCors(options =>
 
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<ConfigurationService>();
+builder.Services.AddSingleton<AiConcurrencyLimiter>();
+builder.Services.AddSingleton<LanguageDetectionService>();
 builder.Services.AddSingleton<TranscriptChunkingService>();
+builder.Services.AddSingleton<TranscriptTranslationService>();
 builder.Services.AddSingleton<RegexExtractionService>();
 builder.Services.AddSingleton<RoleDetectionService>();
 builder.Services.AddSingleton<AzureLanguageService>();
+builder.Services.AddSingleton<OpenAiExtractionService>();
 builder.Services.AddSingleton<AnalysisResultFileWriter>();
+builder.Services.AddSingleton<AnalysisHistoryService>();
 builder.Services.AddSingleton<TranscriptAnalysisService>();
 
 var app = builder.Build();
@@ -94,23 +99,66 @@ app.MapGet("/health", (ConfigurationService config) => Results.Ok(new
 }))
 .WithName("Health");
 
+app.MapGet("/history", async (
+    AnalysisHistoryService history,
+    CancellationToken cancellationToken) =>
+{
+    var items = await history.ListAsync(cancellationToken);
+    return Results.Ok(items);
+})
+.WithName("ListAnalysisHistory");
+
+app.MapGet("/history/{id}", async (
+    string id,
+    AnalysisHistoryService history,
+    CancellationToken cancellationToken) =>
+{
+    var item = await history.GetAsync(id, cancellationToken);
+    return item is null ? Results.NotFound(new { detail = "history item not found" }) : Results.Ok(item);
+})
+.WithName("GetAnalysisHistoryDetail");
+
+app.MapDelete("/history/{id}", async (
+    string id,
+    AnalysisHistoryService history,
+    CancellationToken cancellationToken) =>
+{
+    var deleted = await history.DeleteAsync(id, cancellationToken);
+    return deleted ? Results.NoContent() : Results.NotFound(new { detail = "history item not found" });
+})
+.WithName("DeleteAnalysisHistoryItem");
+
 app.MapPost("/analyze", async (
     AnalyzeRequest request,
+    LanguageDetectionService languageDetection,
     TranscriptAnalysisService analyzer,
     CancellationToken cancellationToken) =>
 {
- var transcriptText = !string.IsNullOrWhiteSpace(request.TranscriptText)
-     ? request.TranscriptText
-     : request.Transcript;
+    var transcriptText = !string.IsNullOrWhiteSpace(request.TranscriptText)
+        ? request.TranscriptText
+        : request.Transcript;
 
-if (string.IsNullOrWhiteSpace(transcriptText))
-{
-    return Results.BadRequest(new { detail = "transcript or transcriptText must not be empty" });
-}
+    if (string.IsNullOrWhiteSpace(transcriptText))
+    {
+        return Results.BadRequest(new { detail = "transcript or transcriptText must not be empty" });
+    }
 
     var normalizedTranscriptText = NormalizeTranscriptNewlines(transcriptText);
+    var languageResult = await languageDetection.ValidateAsync(
+        normalizedTranscriptText,
+        request.Language,
+        cancellationToken);
 
-    var response = await analyzer.AnalyzeAsync(normalizedTranscriptText, request.Language, cancellationToken);
+    if (!languageResult.IsSupported)
+    {
+        return Results.BadRequest(new
+        {
+            detail = languageResult.Message,
+            detectedLanguage = languageResult.DetectedLanguage
+        });
+    }
+
+    var response = await analyzer.AnalyzeAsync(normalizedTranscriptText, languageResult.Language, cancellationToken);
     return Results.Ok(response);
 })
 .WithName("AnalyzeTranscript");

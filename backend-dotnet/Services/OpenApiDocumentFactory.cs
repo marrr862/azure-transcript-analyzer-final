@@ -44,7 +44,7 @@ public static class OpenApiDocumentFactory
                                     required = new[] { "transcriptText" },
                                     properties = new Dictionary<string, object>
                                     {
-                                        ["language"] = new { type = "string", example = "en" },
+                                        ["language"] = new { type = "string", example = "auto", description = "auto, en, or hy. Mixed English-Armenian is auto-detected and translated to English. Other detected languages are rejected." },
                                         ["transcriptText"] = new { type = "string", example = "Agent: Hello.\\nCaller: My name is John Smith." }
                                     }
                                 }
@@ -61,6 +61,38 @@ public static class OpenApiDocumentFactory
                         {
                             description = "Invalid request"
                         }
+                    }
+                }
+            },
+            ["/history"] = new
+            {
+                get = new
+                {
+                    summary = "List saved local analyses",
+                    responses = new Dictionary<string, object>
+                    {
+                        ["200"] = new { description = "Saved analysis list" }
+                    }
+                }
+            },
+            ["/history/{id}"] = new
+            {
+                get = new
+                {
+                    summary = "Get saved local analysis detail",
+                    responses = new Dictionary<string, object>
+                    {
+                        ["200"] = new { description = "Saved analysis detail" },
+                        ["404"] = new { description = "Saved analysis not found" }
+                    }
+                },
+                delete = new
+                {
+                    summary = "Delete saved local analysis",
+                    responses = new Dictionary<string, object>
+                    {
+                        ["204"] = new { description = "Saved analysis deleted" },
+                        ["404"] = new { description = "Saved analysis not found" }
                     }
                 }
             }

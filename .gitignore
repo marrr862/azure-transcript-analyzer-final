@@ -1,6 +1,8 @@
 # Node
 frontend/node_modules/
 frontend/dist/
+frontend/*.tsbuildinfo
+frontend/vite.config.d.ts
 
 # .NET
 backend-dotnet/bin/

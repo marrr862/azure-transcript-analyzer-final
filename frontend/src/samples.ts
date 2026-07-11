@@ -6,7 +6,7 @@ Agent: And your email address on the account?
 Caller: It's john.smith@example.com
 Agent: Can you also confirm your address?
 Caller: I live at 742 Evergreen Terrace, Springfield, IL 62701.
-Agent: Thank you John. One last thing — can you provide the last four digits of your Social Security Number?
+Agent: Thank you John. One last thing - can you provide the last four digits of your Social Security Number?
 Caller: Yes, my SSN is 123-45-6789.
 Agent: Perfect. Let me pull up your account now. Please hold for a moment.
 Caller: No problem, thank you.`;

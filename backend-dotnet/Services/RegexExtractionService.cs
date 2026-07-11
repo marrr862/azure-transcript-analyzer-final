@@ -47,12 +47,12 @@ public sealed partial class RegexExtractionService
             merged.DateOfBirth = FirstNonEmpty(merged.DateOfBirth, source.DateOfBirth);
             merged.DoctorName = FirstNonEmpty(merged.DoctorName, source.DoctorName);
 
+            AddUnique(merged.Conditions, source.Conditions);
+            AddUnique(merged.Medications, source.Medications);
+            AddUnique(merged.ImportantDetails, source.ImportantDetails);
             foreach (var item in source.Other)
             {
-                if (!merged.Other.Contains(item, StringComparer.OrdinalIgnoreCase))
-                {
-                    merged.Other.Add(item);
-                }
+                AddUnique(merged.Other, [item]);
             }
         }
 
@@ -67,6 +67,19 @@ public sealed partial class RegexExtractionService
 
     private static string FirstNonEmpty(string current, string candidate) =>
         string.IsNullOrWhiteSpace(current) ? candidate.Trim() : current;
+
+    private static void AddUnique(List<string> target, IEnumerable<string> values)
+    {
+        foreach (var value in values)
+        {
+            var trimmed = value.Trim();
+            if (!string.IsNullOrWhiteSpace(trimmed)
+                && !target.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
+            {
+                target.Add(trimmed);
+            }
+        }
+    }
 
     private static string TrimArmenianVerb(string value) =>
         value.EndsWith(" է", StringComparison.Ordinal) ? value[..^2].Trim() : value;

@@ -42,6 +42,8 @@ public sealed class AnalysisResultFileWriter(IWebHostEnvironment environment)
         builder.AppendLine("============================================");
         builder.AppendLine($"Created At UTC: {createdAtUtc:yyyy-MM-dd HH:mm:ss}Z");
         builder.AppendLine($"Language: {Normalize(language)}");
+        builder.AppendLine($"Detected Language: {Normalize(response.DetectedLanguage)}");
+        builder.AppendLine($"Translation Method: {Normalize(response.TranslationMethod)}");
         builder.AppendLine($"Transcript Length: {transcriptLength}");
         builder.AppendLine($"Role Method: {response.RoleMethod}");
         builder.AppendLine();
@@ -74,6 +76,25 @@ public sealed class AnalysisResultFileWriter(IWebHostEnvironment environment)
         AppendList(builder, "Conditions", response.ExtractedAttributes.Conditions);
         AppendList(builder, "Medications", response.ExtractedAttributes.Medications);
         AppendList(builder, "Other", response.ExtractedAttributes.Other);
+        AppendList(builder, "Important Details", response.ExtractedAttributes.ImportantDetails);
+
+        builder.AppendLine();
+        builder.AppendLine("Attribute Evidence");
+        builder.AppendLine("------------------");
+        if (response.AttributeEvidence.Count == 0)
+        {
+            builder.AppendLine("(none)");
+        }
+        else
+        {
+            foreach (var evidence in response.AttributeEvidence)
+            {
+                builder.AppendLine($"- {evidence.Label}: {evidence.Value}");
+                builder.AppendLine($"  Confidence: {evidence.Confidence:P0}");
+                builder.AppendLine($"  Source: {Normalize(evidence.Source)}");
+                builder.AppendLine($"  Snippet: {Normalize(evidence.Snippet)}");
+            }
+        }
 
         builder.AppendLine();
         builder.AppendLine("Raw Azure Entities");
@@ -99,6 +120,14 @@ public sealed class AnalysisResultFileWriter(IWebHostEnvironment environment)
             builder.AppendLine("Warnings");
             builder.AppendLine("--------");
             builder.AppendLine(response.Warning);
+        }
+
+        if (!string.IsNullOrWhiteSpace(response.TranslatedTranscript))
+        {
+            builder.AppendLine();
+            builder.AppendLine("Translated Transcript");
+            builder.AppendLine("---------------------");
+            builder.AppendLine(response.TranslatedTranscript);
         }
 
         return builder.ToString();
