@@ -645,8 +645,10 @@ function TranscriptionPage() {
 
   const onSubmit = (values: AnalyzePayload) => {
     setAnalyzeError(null);
+    setResult(null);
     setLastSyncedAt(null);
     setAnalysisRunId((current) => current + 1);
+    window.localStorage.removeItem(LAST_RESULT_KEY);
     mutation.mutate(values);
   };
 

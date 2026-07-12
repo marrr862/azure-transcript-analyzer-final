@@ -20,7 +20,6 @@ public sealed class AzureLanguageService(
         ["EUPassportNumber"] = nameof(ExtractedAttributes.SocialSecurityNumber),
         ["InternationalBankingAccountNumber"] = "Other",
         ["Organization"] = "Other",
-        ["DateTime"] = "Other",
         ["URL"] = "Other",
         ["IPAddress"] = "Other",
         ["Age"] = "Other",

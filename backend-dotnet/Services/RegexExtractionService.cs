@@ -65,20 +65,49 @@ public sealed partial class RegexExtractionService
     private static string FirstValue(MatchCollection matches) =>
         matches.Count > 0 ? matches[0].Value.Trim() : string.Empty;
 
-    private static string FirstNonEmpty(string current, string candidate) =>
-        string.IsNullOrWhiteSpace(current) ? candidate.Trim() : current;
+    private static string FirstNonEmpty(string current, string candidate)
+    {
+        if (!IsReadableText(candidate))
+        {
+            return current.Trim();
+        }
+
+        var currentTrimmed = current.Trim();
+        var candidateTrimmed = candidate.Trim();
+        if (string.IsNullOrWhiteSpace(currentTrimmed))
+        {
+            return candidateTrimmed;
+        }
+
+        return candidateTrimmed.Length > currentTrimmed.Length
+            && candidateTrimmed.StartsWith(currentTrimmed, StringComparison.OrdinalIgnoreCase)
+            ? candidateTrimmed
+            : currentTrimmed;
+    }
 
     private static void AddUnique(List<string> target, IEnumerable<string> values)
     {
         foreach (var value in values)
         {
             var trimmed = value.Trim();
-            if (!string.IsNullOrWhiteSpace(trimmed)
+            if (IsReadableText(trimmed)
                 && !target.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
             {
                 target.Add(trimmed);
             }
         }
+    }
+
+    private static bool IsReadableText(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        return value.All(ch =>
+            ch is '\t' or '\n' or '\r'
+            || (!char.IsControl(ch) && ch is not '\u25a1' and not '\ufffd'));
     }
 
     private static string TrimArmenianVerb(string value) =>
@@ -155,7 +184,7 @@ public sealed partial class RegexExtractionService
     [GeneratedRegex(@"(?:my name is|անունը)\s+([A-ZԱ-Ֆա-ֆ\w][a-zA-Zա-ֆԱ-Ֆ\w]+(?:\s+[A-ZԱ-Ֆա-ֆ\w][a-zA-Zա-ֆԱ-Ֆ\w]+){0,3})", RegexOptions.IgnoreCase)]
     private static partial Regex NameRegex();
 
-    [GeneratedRegex(@"(?:i live at|my address is|located at|address[:\s]+|ես ապրում եմ)\s*(.+?)(?:\.|։|,\s*[A-Z]{2}\s*\d{5}|$)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:i live at|my address is|located at|address[:\s]+|ես ապրում եմ|ձեր հասցեն[:՝]?)\s*(.+?)(?:(?<!բնակ)\.|։|,\s*[A-Z]{2}\s*\d{5}|$)", RegexOptions.IgnoreCase)]
     private static partial Regex AddressRegex();
 
     [GeneratedRegex(@"\D")]

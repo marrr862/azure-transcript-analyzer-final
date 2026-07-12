@@ -20,6 +20,8 @@ public sealed class OpenAiExtractionService(
     Do not infer or invent missing data.
     Preserve names, addresses, IDs, medications, and conditions exactly as written.
     Preserve every extracted value in the same language and writing system as it appears in the transcript. Do not translate Armenian values to English.
+    Write importantDetails in the same language as the transcript sentence they come from. For Armenian transcript details, write Armenian details, not English summaries.
+    Never output replacement characters, square boxes, control characters, or unreadable mojibake. If a value is unreadable, leave it empty.
     For importantDetails, choose only concise facts that matter in this specific conversation: urgent needs, requested actions, decisions, preferences, symptoms, problems, deadlines, next steps, risks, account/medical context, or promises.
     Do not add generic filler. Do not create categories. Do not repeat values already captured in fixed fields unless the surrounding context is important.
     Limit each array to at most 8 items. Keep every array item under 120 characters.
@@ -48,6 +50,7 @@ public sealed class OpenAiExtractionService(
     Keep only explicit facts from that JSON. Do not invent anything.
     Remove duplicates, remove generic filler, and keep the most complete useful values.
     Preserve every value in its original language and writing system. Do not translate Armenian values to English or English values to Armenian.
+    Write importantDetails in the same language as the source value. Never output replacement characters, square boxes, control characters, or unreadable mojibake.
     For importantDetails, keep concise facts that matter to the call: urgent needs, requested actions, decisions, symptoms, deadlines, next steps, risks, promises, and account/medical context.
     Limit each array to at most 8 items. Keep every array item under 120 characters.
     Return only valid minified JSON with the exact same shape.
@@ -296,13 +299,13 @@ public sealed class OpenAiExtractionService(
 
         return new ExtractedAttributes
         {
-            Name = ReadString(root, "name"),
-            Address = ReadString(root, "address"),
-            DateOfBirth = ReadString(root, "dateOfBirth"),
-            SocialSecurityNumber = ReadString(root, "socialSecurityNumber"),
-            PhoneNumber = ReadString(root, "phoneNumber"),
-            Email = ReadString(root, "email"),
-            DoctorName = ReadString(root, "doctorName"),
+            Name = ReadCleanString(root, "name"),
+            Address = ReadCleanString(root, "address"),
+            DateOfBirth = ReadCleanString(root, "dateOfBirth"),
+            SocialSecurityNumber = ReadCleanString(root, "socialSecurityNumber"),
+            PhoneNumber = ReadCleanString(root, "phoneNumber"),
+            Email = ReadCleanString(root, "email"),
+            DoctorName = ReadCleanString(root, "doctorName"),
             Conditions = ReadStringArray(root, "conditions"),
             Medications = ReadStringArray(root, "medications"),
             Other = ReadStringArray(root, "other"),
@@ -342,6 +345,12 @@ public sealed class OpenAiExtractionService(
             : element.ToString().Trim();
     }
 
+    private static string ReadCleanString(JsonElement root, string propertyName)
+    {
+        var value = ReadString(root, propertyName);
+        return IsReadableText(value) ? value : string.Empty;
+    }
+
     private static List<string> ReadStringArray(JsonElement root, string propertyName)
     {
         if (!root.TryGetProperty(propertyName, out var element)
@@ -355,8 +364,21 @@ public sealed class OpenAiExtractionService(
             .Select(item => item.ValueKind == JsonValueKind.String ? item.GetString() : item.ToString())
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Select(value => value!.Trim())
+            .Where(IsReadableText)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private static bool IsReadableText(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        return value.All(ch =>
+            ch is '\t' or '\n' or '\r'
+            || (!char.IsControl(ch) && ch is not '\u25a1' and not '\ufffd'));
     }
 
     private static async Task<TResult[]> RunWithBoundedParallelismAsync<TItem, TResult>(

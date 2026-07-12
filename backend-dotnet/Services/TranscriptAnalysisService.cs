@@ -48,12 +48,14 @@ public sealed class TranscriptAnalysisService(
             warnings.Add(consolidationWarning);
         }
 
+        var finalAttributes = FillMissingScalarAttributes(consolidatedAttributes, extractedAttributes);
+
         var response = new AnalyzeResponse
         {
             Conversation = conversation,
-            ExtractedAttributes = consolidatedAttributes,
+            ExtractedAttributes = finalAttributes,
             RawAzureEntities = rawEntities,
-            AttributeEvidence = BuildAttributeEvidence(consolidatedAttributes, rawEntities, transcript),
+            AttributeEvidence = BuildAttributeEvidence(finalAttributes, rawEntities, transcript),
             Warning = warnings.Count > 0 ? string.Join("; ", warnings.Distinct(StringComparer.OrdinalIgnoreCase)) : null,
             RoleMethod = roleMethod,
             DetectedLanguage = normalizedLanguage,
@@ -70,6 +72,48 @@ public sealed class TranscriptAnalysisService(
 
         return response;
     }
+
+    private static ExtractedAttributes FillMissingScalarAttributes(
+        ExtractedAttributes consolidated,
+        ExtractedAttributes fallback)
+    {
+        consolidated.Name = PreferMoreComplete(consolidated.Name, fallback.Name);
+        consolidated.Address = PreferMoreComplete(consolidated.Address, fallback.Address);
+        consolidated.DateOfBirth = PreferMoreComplete(consolidated.DateOfBirth, fallback.DateOfBirth);
+        consolidated.SocialSecurityNumber = PreferMoreComplete(consolidated.SocialSecurityNumber, fallback.SocialSecurityNumber);
+        consolidated.PhoneNumber = PreferMoreComplete(consolidated.PhoneNumber, fallback.PhoneNumber);
+        consolidated.Email = PreferMoreComplete(consolidated.Email, fallback.Email);
+        consolidated.DoctorName = PreferMoreComplete(consolidated.DoctorName, fallback.DoctorName);
+        consolidated.Other = consolidated.Other
+            .Where(item => item.Contains(':', StringComparison.Ordinal))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return consolidated;
+    }
+
+    private static string PreferMoreComplete(string current, string fallback)
+    {
+        var currentTrimmed = current.Trim();
+        var fallbackTrimmed = fallback.Trim();
+        if (string.IsNullOrWhiteSpace(currentTrimmed))
+        {
+            return fallbackTrimmed;
+        }
+
+        if (fallbackTrimmed.StartsWith('+')
+            && DigitsOnly(currentTrimmed) == DigitsOnly(fallbackTrimmed))
+        {
+            return fallbackTrimmed;
+        }
+
+        return fallbackTrimmed.Length > currentTrimmed.Length
+            && fallbackTrimmed.StartsWith(currentTrimmed, StringComparison.OrdinalIgnoreCase)
+            ? fallbackTrimmed
+            : currentTrimmed;
+    }
+
+    private static string DigitsOnly(string value) =>
+        new(value.Where(char.IsDigit).ToArray());
 
     private static string NormalizeLanguage(string? language) =>
         language?.Trim().ToLowerInvariant() switch
