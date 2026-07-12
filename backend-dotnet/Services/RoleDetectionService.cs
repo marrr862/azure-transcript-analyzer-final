@@ -108,7 +108,7 @@ public sealed partial class RoleDetectionService(
                         warnings.Add($"Azure OpenAI role detection was uncertain for part of chunk {chunk.Index + 1}");
                     }
 
-                    openAiTurns.AddRange(chunkTurns);
+                    openAiTurns.AddRange(RefineTurnsWithEmbeddedCues(chunkTurns));
                     continue;
                 }
 
@@ -295,15 +295,30 @@ public sealed partial class RoleDetectionService(
             return "Caller";
         }
 
-        var normalized = text.Trim().TrimEnd('.', '!', '?', '։');
+        var normalized = text.Trim().TrimEnd('.', '!', '?', '։', ':');
         if (string.Equals(normalized, "yes", StringComparison.OrdinalIgnoreCase)
             && !string.IsNullOrWhiteSpace(previousSentence)
-            && previousSentence.TrimEnd().EndsWith("?", StringComparison.Ordinal))
+            && EndsWithQuestionOrPrompt(previousSentence))
         {
             return currentRole == "Agent" ? "Caller" : "Agent";
         }
 
+        if (currentRole == "Agent"
+            && !string.IsNullOrWhiteSpace(previousSentence)
+            && EndsWithQuestionOrPrompt(previousSentence))
+        {
+            return "Caller";
+        }
+
         return null;
+    }
+
+    private static bool EndsWithQuestionOrPrompt(string text)
+    {
+        var trimmed = text.TrimEnd();
+        return trimmed.EndsWith("?", StringComparison.Ordinal)
+            || trimmed.EndsWith("՞", StringComparison.Ordinal)
+            || trimmed.EndsWith(":", StringComparison.Ordinal);
     }
 
     private static void AddOrMergeTurn(List<ConversationTurn> turns, string role, string text)
@@ -370,7 +385,10 @@ public sealed partial class RoleDetectionService(
             return [text];
         }
 
-        var sentences = SentenceRegex().Split(text)
+        var normalized = EmbeddedBoundaryRegex().Replace(text, "\n");
+        var sentences = normalized
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .SelectMany(part => SentenceRegex().Split(part))
             .Select(part => part.Trim())
             .Where(part => !string.IsNullOrWhiteSpace(part))
             .ToList();
@@ -879,16 +897,19 @@ public sealed partial class RoleDetectionService(
     [GeneratedRegex(@"(?<![\p{L}\p{N}])(agent|caller|customer|client|patient|representative|rep|support|operator|assistant|advisor|specialist|nurse|doctor|clinic|staff|member|user|speaker\s*[12]|Գործակալ|Զանգահարող|Հաճախորդ|Օպերատոր)\s*[:\-]\s*", RegexOptions.IgnoreCase)]
     private static partial Regex ExplicitLabelRegex();
 
-    [GeneratedRegex(@"(?<=[.!?։])\s+")]
+    [GeneratedRegex(@"(?<!էլ\.)(?<!բնակ\.)(?<=[.!?։:])\s+")]
     private static partial Regex SentenceRegex();
 
-    [GeneratedRegex(@"\b(can you confirm|please confirm|i will update|i will add|i can create|i can help|i will note|i will link|i will create|would you like me|understood|thank you[,.]?\s*i will|yes,\s*i can|yes,\s*that is important|okay,\s*i will|please also|good\.)\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\s+(?=(ձեր էլ\.?\s*հասցեն|ձեր հասցեն|շնորհակալություն,|կարո՞ղ եք|կարող եք|շատ լավ|մի պահ սպասեք|լավ,\s*շնորհակալություն|your email address|your address|can you also|could you also|thank you[, ]|one moment|please hold))", RegexOptions.IgnoreCase)]
+    private static partial Regex EmbeddedBoundaryRegex();
+
+    [GeneratedRegex(@"\b(can you confirm|please confirm|i will update|i will add|i can create|i can help|i will note|i will link|i will create|would you like me|understood|thank you[,.]?\s*i will|yes,\s*i can|yes,\s*that is important|okay,\s*i will|please also|good\.)\b|ձեր էլ\.?\s*հասցեն|ձեր հասցեն|կարո՞ղ եք նաև նշել|շատ լավ|մի պահ սպասեք|հիմա կստուգեմ|^հասցեն:?$", RegexOptions.IgnoreCase)]
     private static partial Regex EmbeddedSpeakerCueRegex();
 
-    [GeneratedRegex(@"^(for verification,\s*)?(can you confirm|could you confirm|please confirm)\b|^(i'll|i will|i can|i am going to|i'm going to)\s+(add|update|note|create|link|send|request|include|submit|open|escalate|attach|ask|check|make|mark|email|process|review|verify|confirm)\b|^(okay|ok|understood|thank you)[,.\s]+(i'll|i will|i can)\b|^yes[,.]?\s+(that is important|i can|i will)\b|^would you like me\b|^thank you for the call\b|^have a good day\b|շնորհակալություն զանգելու համար|ինչպե՞ս կարող եմ օգնել|ուրախ եմ օգնել|կարո՞ղ եք հաստատել|կարող եք հաստատել|ես կթարմացնեմ|կթարմացնեմ", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^(for verification,\s*)?(can you confirm|could you confirm|please confirm)\b|^(i'll|i will|i can|i am going to|i'm going to)\s+(add|update|note|create|link|send|request|include|submit|open|escalate|attach|ask|check|make|mark|email|process|review|verify|confirm)\b|^(okay|ok|understood|thank you)[,.\s]+(i'll|i will|i can)\b|^yes[,.]?\s+(that is important|i can|i will)\b|^would you like me\b|^thank you for the call\b|^have a good day\b|շնորհակալություն զանգելու համար|ինչպե՞ս կարող եմ օգնել|ուրախ եմ օգնել|կարո՞ղ եք հաստատել|կարող եք հաստատել|ձեր էլ\.?\s*հասցեն|^հասցեն:?$|ձեր հասցեն|^շնորհակալություն,\s*[\p{L}\s.-]{1,40}[։.!:]?$|կարո՞ղ եք նաև նշել|շատ լավ|մի պահ սպասեք|հիմա կստուգեմ|ես կթարմացնեմ|կթարմացնեմ", RegexOptions.IgnoreCase)]
     private static partial Regex AgentCueRegex();
 
-    [GeneratedRegex(@"^(please|also please)\b|^(can you|could you)\b|^(sure|yes[,.]?\s+(please|everything|the|my|i|it|there|sure))\b|^(i do not|i don't|i want|i need)\b|^good[.!]?$|^there are also old ticket\b|^ticket\s+[A-Z]+[-\d]\b|^thank you,\s*i\b|իմ անունը|ուզում եմ|իմ հեռախոսահամար|իհարկե|ես ապրում եմ|իմ էլ|բարեւ", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^(please|also please)\b|^(can you|could you)\b|^(sure|yes[,.]?\s+(please|everything|the|my|i|it|there|sure))\b|^(i do not|i don't|i want|i need)\b|^good[.!]?$|^there are also old ticket\b|^ticket\s+[A-Z]+[-\d]\b|^thank you,\s*i\b|իմ անունը|ուզում եմ|իմ հեռախոսահամար|իհարկե|ես ապրում եմ|իմ էլ|բարեւ|^[\w.%+-]+@[\w.-]+\.[A-Z]{2,}\b|^[A-Z]{2}\d{7}\b|^լավ,\s*շնորհակալություն", RegexOptions.IgnoreCase)]
     private static partial Regex CallerCueRegex();
 
     private sealed record RoleSegment(int Id, string Text);
