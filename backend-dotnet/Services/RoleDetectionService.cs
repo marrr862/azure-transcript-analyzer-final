@@ -26,6 +26,8 @@ public sealed partial class RoleDetectionService(
     Prefer the spoken intent over the previous visible label.
     Agent segments often ask verification or service questions, confirm actions, summarize a request, or say phrases like "I will add", "I will update", "I will create", "Would you like me", "Understood", or "Thank you for the call".
     Caller segments often provide personal facts, answer verification, make requests, correct details, or say phrases like "please", "can you", "I do not want", "yes please", or "everything is correct".
+    Armenian Agent segments often include phrases like "շնորհակալություն զանգելու համար", "ինչպե՞ս կարող եմ օգնել", "ուրախ եմ օգնել", "կարո՞ղ եք հաստատել", or "ես կթարմացնեմ".
+    Armenian Caller segments often include phrases like "իմ անունը", "ուզում եմ", "իմ հեռախոսահամար", "իհարկե", "ես ապրում եմ", or "իմ էլ".
 
     Allowed roles:
     - Agent
@@ -883,10 +885,10 @@ public sealed partial class RoleDetectionService(
     [GeneratedRegex(@"\b(can you confirm|please confirm|i will update|i will add|i can create|i can help|i will note|i will link|i will create|would you like me|understood|thank you[,.]?\s*i will|yes,\s*i can|yes,\s*that is important|okay,\s*i will|please also|good\.)\b", RegexOptions.IgnoreCase)]
     private static partial Regex EmbeddedSpeakerCueRegex();
 
-    [GeneratedRegex(@"^(for verification,\s*)?(can you confirm|could you confirm|please confirm)\b|^(i'll|i will|i can|i am going to|i'm going to)\s+(add|update|note|create|link|send|request|include|submit|open|escalate|attach|ask|check|make|mark|email|process|review|verify|confirm)\b|^(okay|ok|understood|thank you)[,.\s]+(i'll|i will|i can)\b|^yes[,.]?\s+(that is important|i can|i will)\b|^would you like me\b|^thank you for the call\b|^have a good day\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^(for verification,\s*)?(can you confirm|could you confirm|please confirm)\b|^(i'll|i will|i can|i am going to|i'm going to)\s+(add|update|note|create|link|send|request|include|submit|open|escalate|attach|ask|check|make|mark|email|process|review|verify|confirm)\b|^(okay|ok|understood|thank you)[,.\s]+(i'll|i will|i can)\b|^yes[,.]?\s+(that is important|i can|i will)\b|^would you like me\b|^thank you for the call\b|^have a good day\b|շնորհակալություն զանգելու համար|ինչպե՞ս կարող եմ օգնել|ուրախ եմ օգնել|կարո՞ղ եք հաստատել|կարող եք հաստատել|ես կթարմացնեմ|կթարմացնեմ", RegexOptions.IgnoreCase)]
     private static partial Regex AgentCueRegex();
 
-    [GeneratedRegex(@"^(please|also please)\b|^(can you|could you)\b|^(sure|yes[,.]?\s+(please|everything|the|my|i|it|there|sure))\b|^(i do not|i don't|i want|i need)\b|^good[.!]?$|^there are also old ticket\b|^ticket\s+[A-Z]+[-\d]\b|^thank you,\s*i\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^(please|also please)\b|^(can you|could you)\b|^(sure|yes[,.]?\s+(please|everything|the|my|i|it|there|sure))\b|^(i do not|i don't|i want|i need)\b|^good[.!]?$|^there are also old ticket\b|^ticket\s+[A-Z]+[-\d]\b|^thank you,\s*i\b|իմ անունը|ուզում եմ|իմ հեռախոսահամար|իհարկե|ես ապրում եմ|իմ էլ|բարեւ", RegexOptions.IgnoreCase)]
     private static partial Regex CallerCueRegex();
 
     private sealed record RoleSegment(int Id, string Text);
