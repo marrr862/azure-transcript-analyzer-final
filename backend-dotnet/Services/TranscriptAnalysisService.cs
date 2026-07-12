@@ -25,20 +25,19 @@ public sealed class TranscriptAnalysisService(
         }
 
         var analysisTranscript = translationResult.Transcript;
-        var analysisLanguage = translationResult.Method == "openai" ? "en" : normalizedLanguage;
-        var chunks = chunking.Split(analysisTranscript);
         var orderedRoleChunks = chunking.Split(analysisTranscript, includeOverlap: false);
+        var attributeChunks = chunking.Split(transcript);
 
         var (conversation, roleMethod, roleWarnings) = await roleDetection.DetectAsync(analysisTranscript, orderedRoleChunks, cancellationToken);
         warnings.AddRange(roleWarnings);
 
-        var (azureAttributes, rawEntities, azureWarnings) = await azureLanguage.AnalyzeChunksAsync(chunks, analysisLanguage, cancellationToken);
+        var (azureAttributes, rawEntities, azureWarnings) = await azureLanguage.AnalyzeChunksAsync(attributeChunks, normalizedLanguage, cancellationToken);
         warnings.AddRange(azureWarnings);
 
-        var (openAiAttributes, openAiWarnings) = await openAiExtraction.ExtractChunksAsync(chunks, cancellationToken);
+        var (openAiAttributes, openAiWarnings) = await openAiExtraction.ExtractChunksAsync(attributeChunks, cancellationToken);
         warnings.AddRange(openAiWarnings);
 
-        var regexAttributes = regexExtraction.Extract(analysisTranscript);
+        var regexAttributes = regexExtraction.Extract(transcript);
         var extractedAttributes = regexExtraction.Merge([.. azureAttributes, .. openAiAttributes, regexAttributes]);
         var (consolidatedAttributes, consolidationWarning) = await openAiExtraction.ConsolidateAttributesAsync(
             extractedAttributes,
@@ -54,7 +53,7 @@ public sealed class TranscriptAnalysisService(
             Conversation = conversation,
             ExtractedAttributes = consolidatedAttributes,
             RawAzureEntities = rawEntities,
-            AttributeEvidence = BuildAttributeEvidence(consolidatedAttributes, rawEntities, analysisTranscript),
+            AttributeEvidence = BuildAttributeEvidence(consolidatedAttributes, rawEntities, transcript),
             Warning = warnings.Count > 0 ? string.Join("; ", warnings.Distinct(StringComparer.OrdinalIgnoreCase)) : null,
             RoleMethod = roleMethod,
             DetectedLanguage = normalizedLanguage,

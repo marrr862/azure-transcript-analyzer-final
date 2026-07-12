@@ -19,6 +19,7 @@ public sealed class OpenAiExtractionService(
     Extract only facts explicitly present in the transcript chunk.
     Do not infer or invent missing data.
     Preserve names, addresses, IDs, medications, and conditions exactly as written.
+    Preserve every extracted value in the same language and writing system as it appears in the transcript. Do not translate Armenian values to English.
     For importantDetails, choose only concise facts that matter in this specific conversation: urgent needs, requested actions, decisions, preferences, symptoms, problems, deadlines, next steps, risks, account/medical context, or promises.
     Do not add generic filler. Do not create categories. Do not repeat values already captured in fixed fields unless the surrounding context is important.
     Limit each array to at most 8 items. Keep every array item under 120 characters.
@@ -46,6 +47,7 @@ public sealed class OpenAiExtractionService(
     You receive JSON already extracted from transcript chunks.
     Keep only explicit facts from that JSON. Do not invent anything.
     Remove duplicates, remove generic filler, and keep the most complete useful values.
+    Preserve every value in its original language and writing system. Do not translate Armenian values to English or English values to Armenian.
     For importantDetails, keep concise facts that matter to the call: urgent needs, requested actions, decisions, symptoms, deadlines, next steps, risks, promises, and account/medical context.
     Limit each array to at most 8 items. Keep every array item under 120 characters.
     Return only valid minified JSON with the exact same shape.
