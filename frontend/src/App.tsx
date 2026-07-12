@@ -1021,7 +1021,7 @@ function normalizeConversationTurns(turns: ConversationTurn[]) {
   const firstSpeakerOne = turns.find((turn) => normalizeRoleName(turn.role) === "speaker 1")?.text ?? "";
   const speakerOneIsCaller = looksLikeCallerTurn(firstSpeakerOne) || !looksLikeAgentTurn(firstSpeakerOne);
 
-  return turns.map((turn) => {
+  const normalizedTurns = turns.map((turn) => {
     const normalizedRole = normalizeRoleName(turn.role);
 
     if (normalizedRole === "speaker 1") {
@@ -1034,6 +1034,106 @@ function normalizeConversationTurns(turns: ConversationTurn[]) {
 
     return turn;
   });
+
+  return splitEmbeddedConversationTurns(normalizedTurns);
+}
+
+function splitEmbeddedConversationTurns(turns: ConversationTurn[]) {
+  return turns.flatMap((turn) => splitEmbeddedConversationTurn(turn));
+}
+
+function splitEmbeddedConversationTurn(turn: ConversationTurn): ConversationTurn[] {
+  const parts = splitConversationText(turn.text);
+  if (parts.length < 2) {
+    return [turn];
+  }
+
+  let currentRole = turn.role === "Agent" || turn.role === "Caller" ? turn.role : "Caller";
+  let previousText = "";
+  const splitTurns: ConversationTurn[] = [];
+
+  parts.forEach((part) => {
+    const inferredRole = inferEmbeddedRole(part, previousText, currentRole);
+    const role = inferredRole ?? currentRole;
+    const previous = splitTurns[splitTurns.length - 1];
+
+    if (previous?.role === role) {
+      previous.text = `${previous.text} ${part}`;
+    } else {
+      splitTurns.push({ role, text: part });
+    }
+
+    currentRole = role;
+    previousText = part;
+  });
+
+  const roles = new Set(splitTurns.map((item) => item.role));
+  return roles.size > 1 ? splitTurns : [turn];
+}
+
+function splitConversationText(text: string) {
+  const normalized = text.replace(
+    /\s+(?=(ձեր էլ\.?\s*հասցեն|ձեր հասցեն|շնորհակալություն,|կարո՞ղ եք|կարող եք|շատ լավ|մի պահ սպասեք|լավ,\s*շնորհակալություն|your email address|your address|can you also|could you also|thank you[, ]|one moment|please hold))/gi,
+    "\n"
+  );
+
+  return normalized
+    .split(/\n+/)
+    .flatMap(splitSentenceLikeParts)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function splitSentenceLikeParts(text: string) {
+  const parts: string[] = [];
+  let start = 0;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1] ?? "";
+    const candidate = text.slice(start, index + 1);
+    const lowerCandidate = candidate.toLocaleLowerCase();
+    const isPunctuation = char === "." || char === "!" || char === "?" || char === "։" || char === ":";
+    const isKnownAbbreviation = lowerCandidate.endsWith("էլ.") || lowerCandidate.endsWith("բնակ.");
+
+    if (!isPunctuation || isKnownAbbreviation || !/\s/.test(next)) {
+      continue;
+    }
+
+    parts.push(candidate);
+    while (/\s/.test(text[index + 1] ?? "")) {
+      index += 1;
+    }
+    start = index + 1;
+  }
+
+  if (start < text.length) {
+    parts.push(text.slice(start));
+  }
+
+  return parts.length ? parts : [text];
+}
+
+function inferEmbeddedRole(text: string, previousText: string, currentRole: string) {
+  const trimmed = text.trim();
+
+  if (looksLikeAgentTurn(trimmed)) {
+    return "Agent";
+  }
+
+  if (looksLikeCallerTurn(trimmed)) {
+    return "Caller";
+  }
+
+  if (currentRole === "Agent" && endsWithQuestionOrPrompt(previousText)) {
+    return "Caller";
+  }
+
+  return undefined;
+}
+
+function endsWithQuestionOrPrompt(text: string) {
+  return /[?՞:]$/.test(text.trim());
 }
 
 function normalizeRoleName(role: string) {
@@ -1041,11 +1141,11 @@ function normalizeRoleName(role: string) {
 }
 
 function looksLikeCallerTurn(text: string) {
-  return /(^|\b)(i'?m calling|i am calling|my name is|i would like|i need|i want|my primary|my phone|my email|my address|hello,\s*i|yes,\s*(the|my|i|please)|sure,?\s*my)/i.test(text);
+  return /(^|\b)(i'?m calling|i am calling|my name is|i would like|i need|i want|my primary|my phone|my email|my address|hello,\s*i|yes,\s*(the|my|i|please)|sure,?\s*my)|իմ անունը|ուզում եմ|իմ հեռախոսահամար|իհարկե|ես ապրում եմ|իմ էլ|բարեւ|^[\w.%+-]+@[\w.-]+\.[A-Z]{2,}\b|^[A-Z]{2}\d{7}\b|^լավ,\s*շնորհակալություն/i.test(text);
 }
 
 function looksLikeAgentTurn(text: string) {
-  return /(how can i help|thank you for calling|could you|can you confirm|do you have|i understand|i'?ll|i will|i can help)/i.test(text);
+  return /(how can i help|thank you for calling|could you|can you confirm|do you have|i understand|i'?ll|i will|i can help|շնորհակալություն զանգելու համար|ինչպե՞ս կարող եմ օգնել|ուրախ եմ օգնել|կարո՞ղ եք հաստատել|կարող եք հաստատել|ձեր էլ\.?\s*հասցեն|ձեր հասցեն|կարո՞ղ եք նաև նշել|շատ լավ|մի պահ սպասեք|հիմա կստուգեմ)/i.test(text);
 }
 
 function normalizeResultWarning(warning?: string) {
