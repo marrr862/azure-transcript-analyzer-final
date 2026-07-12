@@ -477,7 +477,7 @@ function ResultPanel({ result }: { result: AnalyzeResponse }) {
               <Title level={4} style={{ margin: 0 }}>
                 Conversation, split by speaker.
               </Title>
-              <Text type="secondary">Translated text is used when Armenian or mixed English-Armenian is detected.</Text>
+              <Text type="secondary">Conversation text is shown in the original transcript language.</Text>
             </Space>
             <Tag color={result.roleMethod === "openai" ? "green" : "default"}>
               {result.roleMethod === "openai" ? "Azure OpenAI" : result.roleMethod}
@@ -724,7 +724,7 @@ function TranscriptionPage() {
                 type="info"
                 showIcon
                 message="Large transcript processing is enabled"
-                description="The backend will process chunks in bounded parallel batches and consolidate attributes at the end. Very large Armenian or mixed English-Armenian transcripts may take longer because they are translated before extraction."
+                description="The backend will process chunks in bounded parallel batches and consolidate attributes at the end. Very large Armenian or mixed English-Armenian transcripts may take longer because translation can be used internally."
               />
             ) : null}
             {formState.errors.transcriptText ? (
@@ -953,7 +953,7 @@ function progressDescription(
   }
 
   if (step === "Translation") {
-    return "Mixed or Armenian text is translated before extraction so attributes stay consistent.";
+    return "Mixed or Armenian text can be translated internally while visible results stay in the original language.";
   }
 
   if (step === "Speakers") {

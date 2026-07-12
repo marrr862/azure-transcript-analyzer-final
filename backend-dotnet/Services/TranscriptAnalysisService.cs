@@ -25,10 +25,10 @@ public sealed class TranscriptAnalysisService(
         }
 
         var analysisTranscript = translationResult.Transcript;
-        var orderedRoleChunks = chunking.Split(analysisTranscript, includeOverlap: false);
+        var orderedRoleChunks = chunking.Split(transcript, includeOverlap: false);
         var attributeChunks = chunking.Split(transcript);
 
-        var (conversation, roleMethod, roleWarnings) = await roleDetection.DetectAsync(analysisTranscript, orderedRoleChunks, cancellationToken);
+        var (conversation, roleMethod, roleWarnings) = await roleDetection.DetectAsync(transcript, orderedRoleChunks, cancellationToken);
         warnings.AddRange(roleWarnings);
 
         var (azureAttributes, rawEntities, azureWarnings) = await azureLanguage.AnalyzeChunksAsync(attributeChunks, normalizedLanguage, cancellationToken);

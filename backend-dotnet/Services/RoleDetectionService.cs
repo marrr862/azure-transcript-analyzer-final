@@ -21,6 +21,8 @@ public sealed partial class RoleDetectionService(
 
     Assign a speaker role to each numbered transcript segment.
 
+    Segments may be English, Armenian, or mixed Armenian-English.
+    Do not translate text. Only classify the speaker role for each segment id.
     Prefer the spoken intent over the previous visible label.
     Agent segments often ask verification or service questions, confirm actions, summarize a request, or say phrases like "I will add", "I will update", "I will create", "Would you like me", "Understood", or "Thank you for the call".
     Caller segments often provide personal facts, answer verification, make requests, correct details, or say phrases like "please", "can you", "I do not want", "yes please", or "everything is correct".
