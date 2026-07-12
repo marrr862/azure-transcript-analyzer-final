@@ -226,7 +226,7 @@ public sealed partial class RoleDetectionService(
             return true;
         }
 
-        var sentenceCount = SentenceRegex().Split(turn.Text)
+        var sentenceCount = SplitRoleCandidate(turn.Text, forceSentenceSplit: true)
             .Count(part => !string.IsNullOrWhiteSpace(part));
 
         return sentenceCount >= 5 || EmbeddedSpeakerCueRegex().IsMatch(turn.Text);
@@ -380,7 +380,8 @@ public sealed partial class RoleDetectionService(
 
     private static IEnumerable<string> SplitRoleCandidate(string text, bool forceSentenceSplit)
     {
-        if (!forceSentenceSplit && text.Length <= 700)
+        var hasEmbeddedBoundary = EmbeddedBoundaryRegex().IsMatch(text);
+        if (!forceSentenceSplit && text.Length <= 700 && !hasEmbeddedBoundary)
         {
             return [text];
         }
