@@ -39,6 +39,16 @@ public sealed partial class LanguageDetectionService(
             return LanguageValidationResult.Supported("mixed-en-hy");
         }
 
+        if (scriptProfile.HasSignificantEnglish && !scriptProfile.HasSignificantArmenian)
+        {
+            return LanguageValidationResult.Supported("en");
+        }
+
+        if (scriptProfile.HasSignificantArmenian && !scriptProfile.HasSignificantEnglish)
+        {
+            return LanguageValidationResult.Supported("hy");
+        }
+
         var detection = await DetectAsync(transcript, cancellationToken);
 
         if (detection.Code is not null && !SupportedLanguages.Contains(detection.Code))

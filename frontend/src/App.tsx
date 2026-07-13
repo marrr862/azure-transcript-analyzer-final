@@ -907,7 +907,7 @@ function useAnalysisProgress(
   }, [active, runId]);
 
   const hasArmenian = /[\u0530-\u058f]/.test(transcript);
-  const shouldTranslate = language === "hy" || hasArmenian;
+  const shouldTranslate = hasArmenian;
   const steps = [
     "Queue",
     "Language",
