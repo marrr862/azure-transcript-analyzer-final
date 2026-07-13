@@ -1057,7 +1057,7 @@ function splitEmbeddedConversationTurn(turn: ConversationTurn): ConversationTurn
     const role = inferredRole ?? currentRole;
     const previous = splitTurns[splitTurns.length - 1];
 
-    if (previous?.role === role) {
+    if (previous?.role === role && previous.text.length + part.length <= 420) {
       previous.text = `${previous.text} ${part}`;
     } else {
       splitTurns.push({ role, text: part });
@@ -1068,7 +1068,7 @@ function splitEmbeddedConversationTurn(turn: ConversationTurn): ConversationTurn
   });
 
   const roles = new Set(splitTurns.map((item) => item.role));
-  return roles.size > 1 ? splitTurns : [turn];
+  return roles.size > 1 || turn.text.length >= 700 ? splitTurns : [turn];
 }
 
 function splitConversationText(text: string) {

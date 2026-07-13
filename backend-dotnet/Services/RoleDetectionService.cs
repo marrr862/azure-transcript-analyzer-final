@@ -245,7 +245,7 @@ public sealed partial class RoleDetectionService(
             }
 
             var cueTurns = RefineTurnWithEmbeddedCues(turn);
-            refined.AddRange(HasRoleSwitch(cueTurns) ? cueTurns : [turn]);
+            refined.AddRange(ShouldKeepRefinedTurnSplit(turn, cueTurns) ? cueTurns : [turn]);
         }
 
         return MergeAdjacentSameRole(refined);
@@ -278,7 +278,14 @@ public sealed partial class RoleDetectionService(
             previousSentence = sentence;
         }
 
-        return HasRoleSwitch(refined) ? refined : [turn];
+        return ShouldKeepRefinedTurnSplit(turn, refined) ? refined : [turn];
+    }
+
+    private static bool ShouldKeepRefinedTurnSplit(
+        ConversationTurn original,
+        IReadOnlyList<ConversationTurn> refined)
+    {
+        return HasRoleSwitch(refined) || (original.Text.Length >= 700 && refined.Count > 1);
     }
 
     private static string? InferRoleFromCue(string sentence, string? previousSentence, string currentRole)
@@ -324,7 +331,9 @@ public sealed partial class RoleDetectionService(
     private static void AddOrMergeTurn(List<ConversationTurn> turns, string role, string text)
     {
         var previous = turns.LastOrDefault();
-        if (previous is not null && previous.Role == role)
+        if (previous is not null
+            && previous.Role == role
+            && previous.Text.Length + text.Length <= 420)
         {
             turns[^1] = new ConversationTurn
             {
@@ -830,7 +839,9 @@ public sealed partial class RoleDetectionService(
         foreach (var turn in turns)
         {
             var previous = merged.LastOrDefault();
-            if (previous is not null && previous.Role == turn.Role)
+            if (previous is not null
+                && previous.Role == turn.Role
+                && previous.Text.Length + turn.Text.Length <= 420)
             {
                 merged[^1] = new ConversationTurn
                 {
