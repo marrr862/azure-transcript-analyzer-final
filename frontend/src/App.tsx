@@ -24,7 +24,6 @@ import { theme } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import TextArea from "antd/es/input/TextArea";
 import dayjs from "dayjs";
-import styled from "@emotion/styled";
 import * as React from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
@@ -64,133 +63,6 @@ const schema = yup.object({
   language: yup.mixed<Language>().oneOf(["auto", "en", "hy"]).required()
 });
 
-const PageShell = styled(Layout)`
-  min-height: 100vh;
-  background: var(--app-bg);
-  transition: background 0.2s ease;
-`;
-
-const TopBar = styled(Header)`
-  height: 56px;
-  padding: 0 28px;
-  background: #252525;
-  color: #ffffff;
-  border-bottom: 1px solid #1e1e1e;
-`;
-
-const WorkArea = styled(Content)`
-  padding: 0;
-`;
-
-const Workspace = styled.main`
-  width: min(1180px, calc(100vw - 48px));
-  margin: 0 auto;
-  padding: 96px 0 56px;
-
-  @media (max-width: 760px) {
-    width: calc(100vw - 28px);
-    padding: 44px 0 36px;
-  }
-`;
-
-const Panel = styled.section`
-  background: var(--panel-bg);
-  border: 1px solid var(--panel-border);
-  border-radius: 8px;
-  padding: 18px;
-  box-shadow: var(--panel-shadow);
-`;
-
-const Hero = styled.section`
-  text-align: center;
-  margin-bottom: 22px;
-`;
-
-const AppMark = styled.div`
-  width: 36px;
-  height: 36px;
-  margin: 0 auto 10px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  color: #ffffff;
-  font-weight: 700;
-  background: linear-gradient(135deg, #6c63ff, #13c2c2);
-`;
-
-const InputCard = styled(Panel)`
-  margin-bottom: 22px;
-`;
-
-const ResultCanvas = styled.div`
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 18px;
-  align-items: start;
-  margin-top: 18px;
-
-  @media (max-width: 1000px) {
-    grid-template-columns: 1fr;
-  }
-`;
-
-const ConversationStack = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-`;
-
-const Bubble = styled.div<{ role: string }>`
-  align-self: ${({ role }) => (role === "Agent" ? "flex-start" : "flex-end")};
-  max-width: min(760px, 90%);
-  padding: 10px 12px;
-  border: 1px solid ${({ role }) => (role === "Agent" ? "var(--panel-border)" : "var(--accent-soft-border)")};
-  border-radius: 8px;
-  background: ${({ role }) => (role === "Agent" ? "var(--panel-bg)" : "var(--accent-soft)")};
-`;
-
-const PreBlock = styled.pre`
-  margin: 0;
-  padding: 16px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  border-radius: 8px;
-  background: var(--muted-bg);
-  border: 1px solid var(--panel-border);
-  color: var(--text-main);
-  font-size: 0.82rem;
-  line-height: 1.55;
-`;
-
-const RecentPanel = styled(Panel)`
-  margin-top: 22px;
-`;
-
-const AttributeStack = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-`;
-
-const AttributeCard = styled.div`
-  padding: 12px;
-  border: 1px solid var(--panel-border);
-  border-radius: 8px;
-  background: var(--panel-bg);
-`;
-
-const ThemeToggle = styled.button`
-  min-width: 86px;
-  height: 32px;
-  padding: 0 12px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.08);
-  color: #ffffff;
-  cursor: pointer;
-`;
-
 function HealthStatus() {
   const { data } = useQuery({ queryKey: ["health"], queryFn: checkHealth });
 
@@ -224,16 +96,19 @@ function ConversationView({ turns }: { turns: ConversationTurn[] }) {
   }
 
   return (
-    <ConversationStack>
+    <div className="conversation-stack">
       {normalizedTurns.map((turn, index) => (
-        <Bubble key={`${turn.role}-${index}`} role={turn.role}>
+        <div
+          className={`conversation-bubble conversation-bubble--${turn.role === "Agent" ? "agent" : "caller"}`}
+          key={`${turn.role}-${index}`}
+        >
           <Space direction="vertical" size={4}>
             <RoleTag role={turn.role} />
             <Text>{turn.text}</Text>
           </Space>
-        </Bubble>
+        </div>
       ))}
-    </ConversationStack>
+    </div>
   );
 }
 
@@ -277,9 +152,17 @@ function AttributesTable({ attrs }: { attrs: ExtractedAttributes }) {
   );
 }
 
-function FlaggedAttributes({ attrs, evidence }: { attrs: ExtractedAttributes; evidence: AttributeEvidence[] }) {
+function FlaggedAttributes({
+  attrs,
+  evidence
+}: {
+  attrs: ExtractedAttributes;
+  evidence: AttributeEvidence[];
+}) {
   const findEvidence = (field: string, value: string) =>
-    evidence.find((item) => item.field === field && item.value.toLowerCase() === value.toLowerCase());
+    evidence.find(
+      (item) => item.field === field && item.value.toLowerCase() === value.toLowerCase()
+    );
 
   const primary = [
     ["name", "Person Name", attrs.name],
@@ -303,32 +186,30 @@ function FlaggedAttributes({ attrs, evidence }: { attrs: ExtractedAttributes; ev
   }
 
   return (
-    <AttributeStack>
+    <div className="attribute-stack">
       {primary.map(([field, label, value]) => {
         const itemEvidence = findEvidence(field as string, value as string);
         const confidence = itemEvidence?.confidence ?? 0.84;
 
         return (
-        <AttributeCard key={field as string}>
-          <Flex justify="space-between" align="center" gap={10}>
-            <Space direction="vertical" size={2} style={{ minWidth: 0 }}>
-              <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase" }}>
-                {label}
-              </Text>
-              <Text strong>{value}</Text>
-            </Space>
-            <Tag color={confidence >= 0.9 ? "green" : "gold"}>
-              {formatConfidence(confidence)}
-            </Tag>
-          </Flex>
-        </AttributeCard>
+          <div className="attribute-card" key={field as string}>
+            <Flex justify="space-between" align="center" gap={10}>
+              <Space className="min-width-zero" direction="vertical" size={2}>
+                <Text className="eyebrow" type="secondary">
+                  {label}
+                </Text>
+                <Text strong>{value}</Text>
+              </Space>
+              <Tag color={confidence >= 0.9 ? "green" : "gold"}>{formatConfidence(confidence)}</Tag>
+            </Flex>
+          </div>
         );
       })}
 
       {detailRows.map(([label, values, color]) => (
-        <AttributeCard key={label as string}>
-          <Space direction="vertical" size={8} style={{ width: "100%" }}>
-            <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase" }}>
+        <div className="attribute-card" key={label as string}>
+          <Space className="full-width" direction="vertical" size={8}>
+            <Text className="eyebrow" type="secondary">
               {label}
             </Text>
             <Space wrap>
@@ -339,9 +220,9 @@ function FlaggedAttributes({ attrs, evidence }: { attrs: ExtractedAttributes; ev
               ))}
             </Space>
           </Space>
-        </AttributeCard>
+        </div>
       ))}
-    </AttributeStack>
+    </div>
   );
 }
 
@@ -394,7 +275,14 @@ function AnalysisProgressPanel({
   lastSyncedAt: Date | null;
   runId: number;
 }) {
-  const progress = useAnalysisProgress(active, wordCount, estimatedChunks, language, transcript, runId);
+  const progress = useAnalysisProgress(
+    active,
+    wordCount,
+    estimatedChunks,
+    language,
+    transcript,
+    runId
+  );
 
   if (!active && !lastSyncedAt) {
     return null;
@@ -412,8 +300,8 @@ function AnalysisProgressPanel({
   }
 
   return (
-    <Panel>
-      <Space direction="vertical" size={12} style={{ width: "100%" }}>
+    <section className="panel">
+      <Space className="full-width" direction="vertical" size={12}>
         <Flex justify="space-between" align="center" wrap="wrap" gap={8}>
           <Space direction="vertical" size={0}>
             <Text strong>{progress.label}</Text>
@@ -428,16 +316,16 @@ function AnalysisProgressPanel({
           items={progress.steps.map((title) => ({ title }))}
         />
       </Space>
-    </Panel>
+    </section>
   );
 }
 
 function ResultPanel({ result }: { result: AnalyzeResponse }) {
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
-      <Panel>
+    <Space className="full-width" direction="vertical" size={16}>
+      <section className="panel">
         <Flex justify="space-between" align="center" wrap="wrap" gap={12}>
-          <Title level={4} style={{ margin: 0 }}>
+          <Title className="flush-title" level={4}>
             Analysis Summary
           </Title>
           <Space wrap>
@@ -446,20 +334,28 @@ function ResultPanel({ result }: { result: AnalyzeResponse }) {
               <Tag color="purple">Translated to English</Tag>
             ) : null}
             <Tag color={result.roleMethod === "openai" ? "green" : "default"}>
-              {result.roleMethod === "openai" ? "roles by Azure OpenAI" : `roles by ${result.roleMethod}`}
+              {result.roleMethod === "openai"
+                ? "roles by Azure OpenAI"
+                : `roles by ${result.roleMethod}`}
             </Tag>
           </Space>
         </Flex>
-        <Flex gap={10} wrap="wrap" style={{ marginTop: 14 }}>
-          <Button onClick={() => downloadJson("analysis-result.json", result)}>Download JSON</Button>
+        <Flex className="summary-actions" gap={10} wrap="wrap">
+          <Button onClick={() => downloadJson("analysis-result.json", result)}>
+            Download JSON
+          </Button>
           <Button onClick={() => downloadText("analysis-result.txt", buildResultText(result))}>
             Download TXT
           </Button>
-          <Button onClick={() => navigator.clipboard.writeText(JSON.stringify(result.extractedAttributes, null, 2))}>
+          <Button
+            onClick={() =>
+              navigator.clipboard.writeText(JSON.stringify(result.extractedAttributes, null, 2))
+            }
+          >
             Copy Attributes
           </Button>
         </Flex>
-      </Panel>
+      </section>
 
       {result.warning ? (
         <Alert
@@ -470,51 +366,57 @@ function ResultPanel({ result }: { result: AnalyzeResponse }) {
         />
       ) : null}
 
-      <ResultCanvas>
-        <Panel>
+      <div className="result-canvas">
+        <section className="panel">
           <Flex justify="space-between" align="center" wrap="wrap" gap={12}>
             <Space direction="vertical" size={0}>
-              <Title level={4} style={{ margin: 0 }}>
+              <Title className="flush-title" level={4}>
                 Conversation, split by speaker.
               </Title>
-              <Text type="secondary">Conversation text is shown in the original transcript language.</Text>
+              <Text type="secondary">
+                Conversation text is shown in the original transcript language.
+              </Text>
             </Space>
             <Tag color={result.roleMethod === "openai" ? "green" : "default"}>
               {result.roleMethod === "openai" ? "Azure OpenAI" : result.roleMethod}
             </Tag>
           </Flex>
-          <div style={{ marginTop: 16 }}>
+          <div className="conversation-content">
             <ConversationView turns={result.conversation} />
           </div>
-        </Panel>
+        </section>
 
-        <Panel>
+        <section className="panel">
           <Title level={4}>Flagged attributes.</Title>
-          <FlaggedAttributes attrs={result.extractedAttributes} evidence={result.attributeEvidence ?? []} />
-        </Panel>
-      </ResultCanvas>
+          <FlaggedAttributes
+            attrs={result.extractedAttributes}
+            evidence={result.attributeEvidence ?? []}
+          />
+        </section>
+      </div>
 
-      <Panel>
+      <section className="panel">
         <Title level={4}>All Extracted Attributes</Title>
         <AttributesTable attrs={result.extractedAttributes} />
-      </Panel>
+      </section>
 
       {result.rawAzureEntities.length ? (
-        <Panel>
+        <section className="panel">
           <Title level={4}>Azure Raw Entities</Title>
           <RawEntityTable entities={result.rawAzureEntities} />
-        </Panel>
+        </section>
       ) : null}
-
-      <Panel>
-        <Title level={4}>Full Response</Title>
-        <PreBlock>{JSON.stringify(result, null, 2)}</PreBlock>
-      </Panel>
     </Space>
   );
 }
 
-function HistoryList({ compact = false }: { compact?: boolean }) {
+function HistoryList({
+  compact = false,
+  showAll = false
+}: {
+  compact?: boolean;
+  showAll?: boolean;
+}) {
   const queryClient = useQueryClient();
   const { message } = AntApp.useApp();
   const { data, isLoading } = useQuery({ queryKey: ["history"], queryFn: fetchHistory });
@@ -537,10 +439,12 @@ function HistoryList({ compact = false }: { compact?: boolean }) {
     return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No saved analyses" />;
   }
 
+  const visibleHistory = showAll ? data : data.slice(0, 5);
+
   return (
     <List
       size="small"
-      dataSource={data}
+      dataSource={visibleHistory}
       renderItem={(item: AnalysisHistoryItem) => (
         <List.Item
           actions={[
@@ -556,7 +460,9 @@ function HistoryList({ compact = false }: { compact?: boolean }) {
           ]}
         >
           <List.Item.Meta
-            title={<Link to={`/transcription/${item.id}`}>{formatTimestamp(item.createdAtUtc)}</Link>}
+            title={
+              <Link to={`/transcription/${item.id}`}>{formatTimestamp(item.createdAtUtc)}</Link>
+            }
             description={
               compact
                 ? `${displayLanguage(item.detectedLanguage)} / ${item.translationMethod} / ${item.roleMethod}`
@@ -575,6 +481,7 @@ function TranscriptionPage() {
   const [analyzeError, setAnalyzeError] = React.useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = React.useState<Date | null>(null);
   const [analysisRunId, setAnalysisRunId] = React.useState(0);
+  const [showAllHistory, setShowAllHistory] = React.useState(false);
   const queryClient = useQueryClient();
   const { message } = AntApp.useApp();
   const navigate = useNavigate();
@@ -661,20 +568,21 @@ function TranscriptionPage() {
   };
 
   return (
-    <Workspace>
-      <Hero>
-        <AppMark>AI</AppMark>
-        <Title level={2} style={{ margin: 0 }}>
+    <main className="workspace">
+      <section className="hero">
+        <div className="app-mark">AI</div>
+        <Title className="flush-title" level={2}>
           New Transcription
         </Title>
         <Text type="secondary">
-          Paste a transcript or upload a TXT file to detect language, translate, and extract what matters.
+          Paste a transcript or upload a TXT file to detect language, translate, and extract what
+          matters.
         </Text>
-      </Hero>
+      </section>
 
-      <InputCard>
+      <section className="panel input-card">
         <form onSubmit={handleSubmit(onSubmit)}>
-          <Space direction="vertical" size={14} style={{ width: "100%" }}>
+          <Space className="full-width" direction="vertical" size={14}>
             <Flex justify="space-between" align="center" wrap="wrap" gap={12}>
               <Text strong>Transcript text</Text>
               <Space wrap>
@@ -684,7 +592,7 @@ function TranscriptionPage() {
                   render={({ field }) => (
                     <Select
                       {...field}
-                      style={{ width: 210 }}
+                      className="language-select"
                       options={[
                         { value: "auto", label: "Auto-detect language" },
                         { value: "en", label: "Analyze as English" },
@@ -693,7 +601,12 @@ function TranscriptionPage() {
                     />
                   )}
                 />
-                <Upload beforeUpload={loadFile} maxCount={1} accept=".txt,text/plain" showUploadList={false}>
+                <Upload
+                  beforeUpload={loadFile}
+                  maxCount={1}
+                  accept=".txt,text/plain"
+                  showUploadList={false}
+                >
                   <Button>Upload TXT</Button>
                 </Upload>
                 <Button onClick={() => navigate("/transcription/latest")}>Latest saved</Button>
@@ -715,11 +628,10 @@ function TranscriptionPage() {
             />
             <Flex justify="space-between" align="center" wrap="wrap" gap={8}>
               <Text type="secondary">
-                {transcriptWordCount.toLocaleString()} words / {estimatedChunks.toLocaleString()} estimated chunks
+                {transcriptWordCount.toLocaleString()} words / {estimatedChunks.toLocaleString()}{" "}
+                estimated chunks
               </Text>
-              {transcriptWordCount >= 20000 ? (
-                <Tag color="blue">Large transcript mode</Tag>
-              ) : null}
+              {transcriptWordCount >= 20000 ? <Tag color="blue">Large transcript mode</Tag> : null}
             </Flex>
             {transcriptWordCount >= 20000 ? (
               <Alert
@@ -762,25 +674,31 @@ function TranscriptionPage() {
             </Flex>
           </Space>
         </form>
-      </InputCard>
+      </section>
 
       {result ? <ResultPanel result={result} /> : null}
 
-      <RecentPanel>
+      <section className="panel recent-panel">
         <Flex justify="space-between" align="center" wrap="wrap" gap={12}>
           <Space direction="vertical" size={0}>
-            <Title level={4} style={{ margin: 0 }}>
+            <Title className="flush-title" level={4}>
               Recent Transcriptions
             </Title>
             <Text type="secondary">Saved analyses from local-results</Text>
           </Space>
-          <Tag color="default">All</Tag>
+          <Button
+            type="link"
+            aria-pressed={showAllHistory}
+            onClick={() => setShowAllHistory((current) => !current)}
+          >
+            {showAllHistory ? "Latest 5" : "All"}
+          </Button>
         </Flex>
-        <div style={{ marginTop: 12 }}>
-          <HistoryList />
+        <div className="history-list">
+          <HistoryList showAll={showAllHistory} />
         </div>
-      </RecentPanel>
-    </Workspace>
+      </section>
+    </main>
   );
 }
 
@@ -826,51 +744,62 @@ function HistoryDetailPage() {
 
   if (error || !data) {
     return (
-      <Panel>
-        <Alert type="error" showIcon message="Saved analysis not found" description={toApiError(error)} />
-      </Panel>
+      <section className="panel">
+        <Alert
+          type="error"
+          showIcon
+          message="Saved analysis not found"
+          description={toApiError(error)}
+        />
+      </section>
     );
   }
 
   return (
-    <Workspace>
-      <Space direction="vertical" size={16} style={{ width: "100%" }}>
-      <Flex justify="space-between" align="center" wrap="wrap" gap={12}>
-        <Space direction="vertical" size={0}>
-          <Title level={3} style={{ margin: 0 }}>
-            Analysis Detail
-          </Title>
-          <Text type="secondary">{data.fileName}</Text>
-        </Space>
-        <Space wrap>
-          <Button onClick={() => downloadText(data.fileName, data.content)}>Download TXT</Button>
-          <Button onClick={() => downloadJson(`${data.id}.json`, data)}>Download JSON</Button>
-          <Button danger loading={deleteMutation.isPending} onClick={() => deleteMutation.mutate(data.id)}>
-            Delete
-          </Button>
-          <Button onClick={() => navigate("/")}>New Transcription</Button>
-        </Space>
-      </Flex>
+    <main className="workspace">
+      <Space className="full-width" direction="vertical" size={16}>
+        <Flex justify="space-between" align="center" wrap="wrap" gap={12}>
+          <Space direction="vertical" size={0}>
+            <Title className="flush-title" level={3}>
+              Analysis Detail
+            </Title>
+            <Text type="secondary">{data.fileName}</Text>
+          </Space>
+          <Space wrap>
+            <Button onClick={() => downloadText(data.fileName, data.content)}>Download TXT</Button>
+            <Button onClick={() => downloadJson(`${data.id}.json`, data)}>Download JSON</Button>
+            <Button
+              danger
+              loading={deleteMutation.isPending}
+              onClick={() => deleteMutation.mutate(data.id)}
+            >
+              Delete
+            </Button>
+            <Button onClick={() => navigate("/")}>New Transcription</Button>
+          </Space>
+        </Flex>
 
-      <Panel>
-        <Descriptions bordered size="small" column={{ xs: 1, md: 2 }}>
-          <Descriptions.Item label="Created">{formatTimestamp(data.createdAtUtc)}</Descriptions.Item>
-          <Descriptions.Item label="Language">{data.language}</Descriptions.Item>
-          <Descriptions.Item label="Detected Language">
-            {displayLanguage(data.detectedLanguage)}
-          </Descriptions.Item>
-          <Descriptions.Item label="Translation">{data.translationMethod}</Descriptions.Item>
-          <Descriptions.Item label="Role Method">{data.roleMethod}</Descriptions.Item>
-          <Descriptions.Item label="Transcript Length">{data.transcriptLength}</Descriptions.Item>
-        </Descriptions>
-      </Panel>
+        <section className="panel">
+          <Descriptions bordered size="small" column={{ xs: 1, md: 2 }}>
+            <Descriptions.Item label="Created">
+              {formatTimestamp(data.createdAtUtc)}
+            </Descriptions.Item>
+            <Descriptions.Item label="Language">{data.language}</Descriptions.Item>
+            <Descriptions.Item label="Detected Language">
+              {displayLanguage(data.detectedLanguage)}
+            </Descriptions.Item>
+            <Descriptions.Item label="Translation">{data.translationMethod}</Descriptions.Item>
+            <Descriptions.Item label="Role Method">{data.roleMethod}</Descriptions.Item>
+            <Descriptions.Item label="Transcript Length">{data.transcriptLength}</Descriptions.Item>
+          </Descriptions>
+        </section>
 
-      <Panel>
-        <Title level={4}>Saved TXT Output</Title>
-        <PreBlock>{data.content}</PreBlock>
-      </Panel>
+        <section className="panel">
+          <Title level={4}>Saved TXT Output</Title>
+          <pre className="pre-block">{data.content}</pre>
+        </section>
       </Space>
-    </Workspace>
+    </main>
   );
 }
 
@@ -1018,8 +947,10 @@ function normalizeAnalyzeResponse(result: AnalyzeResponse): AnalyzeResponse {
 }
 
 function normalizeConversationTurns(turns: ConversationTurn[]) {
-  const firstSpeakerOne = turns.find((turn) => normalizeRoleName(turn.role) === "speaker 1")?.text ?? "";
-  const speakerOneIsCaller = looksLikeCallerTurn(firstSpeakerOne) || !looksLikeAgentTurn(firstSpeakerOne);
+  const firstSpeakerOne =
+    turns.find((turn) => normalizeRoleName(turn.role) === "speaker 1")?.text ?? "";
+  const speakerOneIsCaller =
+    looksLikeCallerTurn(firstSpeakerOne) || !looksLikeAgentTurn(firstSpeakerOne);
 
   const normalizedTurns = turns.map((turn) => {
     const normalizedRole = normalizeRoleName(turn.role);
@@ -1093,7 +1024,8 @@ function splitSentenceLikeParts(text: string) {
     const next = text[index + 1] ?? "";
     const candidate = text.slice(start, index + 1);
     const lowerCandidate = candidate.toLocaleLowerCase();
-    const isPunctuation = char === "." || char === "!" || char === "?" || char === "։" || char === ":";
+    const isPunctuation =
+      char === "." || char === "!" || char === "?" || char === "։" || char === ":";
     const isKnownAbbreviation = lowerCandidate.endsWith("էլ.") || lowerCandidate.endsWith("բնակ.");
 
     if (!isPunctuation || isKnownAbbreviation || !/\s/.test(next)) {
@@ -1141,11 +1073,15 @@ function normalizeRoleName(role: string) {
 }
 
 function looksLikeCallerTurn(text: string) {
-  return /(^|\b)(i'?m calling|i am calling|my name is|i would like|i need|i want|my primary|my phone|my email|my address|hello,\s*i|yes,\s*(the|my|i|please)|sure,?\s*my)|իմ անունը|ուզում եմ|իմ հեռախոսահամար|իհարկե|ես ապրում եմ|իմ էլ|բարեւ|^այո[,։\s]|^խնդրում եմ|^կա նաև|^կա նաեւ|^ես upload|^file name-ը|^բայց status-ը|^ինձ ասացին|^employer-ը|^confirmation-ը ուղարկեք|^payment problem|^ես վճարել եմ|^bank statement|^communication preferences|^appointment reminders|^այսինքն|^email-ը|^նաեւ portal issue|^նաև portal issue|^appointment page|^փորձել եմ|^բոլոր տեղերում|^և մեկ բան|^եւ մեկ բան|^words like|^appointment-ը|^insurance card-ը|^billing-ը|^address-ը|^official documents-ը|^ticket-ը(?!\s+(և|եւ)\s+կխնդրեմ)|^ամեն ինչ|^[\w.%+-]+@[\w.-]+\.[A-Z]{2,}\b|^[A-Z]{2}\d{7}\b|^լավ,\s*շնորհակալություն/i.test(text);
+  return /(^|\b)(i'?m calling|i am calling|my name is|i would like|i need|i want|my primary|my phone|my email|my address|hello,\s*i|yes,\s*(the|my|i|please)|sure,?\s*my)|իմ անունը|ուզում եմ|իմ հեռախոսահամար|իհարկե|ես ապրում եմ|իմ էլ|բարեւ|^այո[,։\s]|^խնդրում եմ|^կա նաև|^կա նաեւ|^ես upload|^file name-ը|^բայց status-ը|^ինձ ասացին|^employer-ը|^confirmation-ը ուղարկեք|^payment problem|^ես վճարել եմ|^bank statement|^communication preferences|^appointment reminders|^այսինքն|^email-ը|^նաեւ portal issue|^նաև portal issue|^appointment page|^փորձել եմ|^բոլոր տեղերում|^և մեկ բան|^եւ մեկ բան|^words like|^appointment-ը|^insurance card-ը|^billing-ը|^address-ը|^official documents-ը|^ticket-ը(?!\s+(և|եւ)\s+կխնդրեմ)|^ամեն ինչ|^[\w.%+-]+@[\w.-]+\.[A-Z]{2,}\b|^[A-Z]{2}\d{7}\b|^լավ,\s*շնորհակալություն/i.test(
+    text
+  );
 }
 
 function looksLikeAgentTurn(text: string) {
-  return /(how can i help|thank you for calling|could you|can you confirm|do you have|i understand|i'?ll|i will|i can help|շնորհակալություն զանգելու համար|ինչպե՞ս կարող եմ օգնել|ուրախ եմ օգնել|կարո՞ղ եք հաստատել|կարող եք հաստատել|ձեր էլ\.?\s*հասցեն|ձեր հասցեն|շնորհակալություն[։.!]?$|^ticket-ը\s+(և|եւ)\s+կխնդրեմ|կարո՞ղ եք նաև նշել|կարո՞ղ եք summarize|շատ լավ|մի պահ սպասեք|հիմա կստուգեմ|ես կթարմացնեմ|կթարմացնեմ|ես կավելացնեմ|կավելացնեմ|ես հիմա կստեղծեմ|ես կստեղծեմ|կստեղծեմ|ես տեսնում եմ|status-ը pending manual review|billing department-ը|ես կավելացնեմ billing|դուք հետո|դուք ուզում եք|որ browser|հասկացա|հասկագա)/i.test(text);
+  return /(how can i help|thank you for calling|could you|can you confirm|do you have|i understand|i'?ll|i will|i can help|շնորհակալություն զանգելու համար|ինչպե՞ս կարող եմ օգնել|ուրախ եմ օգնել|կարո՞ղ եք հաստատել|կարող եք հաստատել|ձեր էլ\.?\s*հասցեն|ձեր հասցեն|շնորհակալություն[։.!]?$|^ticket-ը\s+(և|եւ)\s+կխնդրեմ|կարո՞ղ եք նաև նշել|կարո՞ղ եք summarize|շատ լավ|մի պահ սպասեք|հիմա կստուգեմ|ես կթարմացնեմ|կթարմացնեմ|ես կավելացնեմ|կավելացնեմ|ես հիմա կստեղծեմ|ես կստեղծեմ|կստեղծեմ|ես տեսնում եմ|status-ը pending manual review|billing department-ը|ես կավելացնեմ billing|դուք հետո|դուք ուզում եք|որ browser|հասկացա|հասկագա)/i.test(
+    text
+  );
 }
 
 function normalizeResultWarning(warning?: string) {
@@ -1183,7 +1119,9 @@ function formatConfidence(confidence: number) {
 }
 
 function formatWarningMessage(warning: string) {
-  if (/role detection|speaker split|expected end of string|empty content|invalid json/i.test(warning)) {
+  if (
+    /role detection|speaker split|expected end of string|empty content|invalid json/i.test(warning)
+  ) {
     return "Speaker splitting was partially retried. Some turns may use fallback splitting.";
   }
 
@@ -1287,18 +1225,7 @@ function getThemeTokens(mode: ThemeMode) {
 }
 
 function applyThemeVariables(mode: ThemeMode) {
-  const isDark = mode === "dark";
-  const root = document.documentElement;
-
-  root.dataset.theme = mode;
-  root.style.setProperty("--app-bg", isDark ? "#10131a" : "#f5f6fb");
-  root.style.setProperty("--panel-bg", isDark ? "#171b24" : "#ffffff");
-  root.style.setProperty("--panel-border", isDark ? "#2a3040" : "#edf0f7");
-  root.style.setProperty("--panel-shadow", isDark ? "0 12px 40px rgba(0, 0, 0, 0.22)" : "0 12px 40px rgba(31, 36, 48, 0.06)");
-  root.style.setProperty("--muted-bg", isDark ? "#10131a" : "#f8f9fd");
-  root.style.setProperty("--text-main", isDark ? "#eef2ff" : "#1f2430");
-  root.style.setProperty("--accent-soft", isDark ? "rgba(108, 99, 255, 0.18)" : "#eef4ff");
-  root.style.setProperty("--accent-soft-border", isDark ? "rgba(108, 99, 255, 0.35)" : "#dbeafe");
+  document.documentElement.dataset.theme = mode;
 }
 
 export default function App() {
@@ -1316,27 +1243,27 @@ export default function App() {
   return (
     <ConfigProvider theme={getThemeTokens(themeMode)}>
       <AntApp>
-        <PageShell>
-          <TopBar>
-            <Flex justify="space-between" align="center" style={{ height: "100%" }}>
-              <Text style={{ color: "#ffffff", fontSize: 18 }}>New Transcription</Text>
+        <Layout className="page-shell">
+          <Header className="top-bar">
+            <Flex className="top-bar-content" justify="space-between" align="center">
+              <Text className="top-bar-title">New Transcription</Text>
               <Space wrap>
                 <HealthStatus />
-                <ThemeToggle type="button" onClick={toggleTheme}>
+                <button className="theme-toggle" type="button" onClick={toggleTheme}>
                   {themeMode === "light" ? "Dark" : "Light"}
-                </ThemeToggle>
+                </button>
               </Space>
             </Flex>
-          </TopBar>
+          </Header>
           <Layout>
-            <WorkArea>
+            <Content className="work-area">
               <Routes>
                 <Route path="/" element={<TranscriptionPage />} />
                 <Route path="/transcription/:id" element={<HistoryDetailPage />} />
               </Routes>
-            </WorkArea>
+            </Content>
           </Layout>
-        </PageShell>
+        </Layout>
       </AntApp>
     </ConfigProvider>
   );

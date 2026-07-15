@@ -24,6 +24,9 @@ public sealed partial class RoleDetectionService(
     Segments may be English, Armenian, or mixed Armenian-English.
     Do not translate text. Only classify the speaker role for each segment id.
     Prefer the spoken intent over the previous visible label.
+    Classify roles consistently across the whole batch: the Agent represents the organization or service, while the Caller seeks help or provides their own information.
+    Do not alternate roles merely because segments are adjacent. Consecutive segments can belong to the same speaker.
+    A question about "your" name, account, address, date of birth, or contact details is usually Agent; the answer containing "my" or the requested value is usually Caller.
     Agent segments often ask verification or service questions, confirm actions, summarize a request, or say phrases like "I will add", "I will update", "I will create", "Would you like me", "Understood", or "Thank you for the call".
     Caller segments often provide personal facts, answer verification, make requests, correct details, or say phrases like "please", "can you", "I do not want", "yes please", or "everything is correct".
     Armenian Agent segments often include phrases like "շնորհակալություն զանգելու համար", "ինչպե՞ս կարող եմ օգնել", "ուրախ եմ օգնել", "կարո՞ղ եք հաստատել", or "ես կթարմացնեմ".
@@ -108,7 +111,7 @@ public sealed partial class RoleDetectionService(
                         warnings.Add($"Azure OpenAI role detection was uncertain for part of chunk {chunk.Index + 1}");
                     }
 
-                    openAiTurns.AddRange(RefineTurnsWithEmbeddedCues(chunkTurns));
+                    openAiTurns.AddRange(StabilizeDetectedRoles(RefineTurnsWithEmbeddedCues(chunkTurns)));
                     continue;
                 }
 
@@ -302,6 +305,17 @@ public sealed partial class RoleDetectionService(
             return "Caller";
         }
 
+        var evidence = ScoreRoleEvidence(text);
+        if (evidence.Agent >= evidence.Caller + 2)
+        {
+            return "Agent";
+        }
+
+        if (evidence.Caller >= evidence.Agent + 2)
+        {
+            return "Caller";
+        }
+
         var normalized = text.Trim().TrimEnd('.', '!', '?', '։', ':');
         if (string.Equals(normalized, "yes", StringComparison.OrdinalIgnoreCase)
             && !string.IsNullOrWhiteSpace(previousSentence)
@@ -310,15 +324,91 @@ public sealed partial class RoleDetectionService(
             return currentRole == "Agent" ? "Caller" : "Agent";
         }
 
-        if (currentRole == "Agent"
-            && !string.IsNullOrWhiteSpace(previousSentence)
+        if (!string.IsNullOrWhiteSpace(previousSentence)
             && EndsWithQuestionOrPrompt(previousSentence))
         {
-            return "Caller";
+            return OppositeRole(currentRole);
         }
 
         return null;
     }
+
+    private static (int Agent, int Caller) ScoreRoleEvidence(string text)
+    {
+        var agent = 0;
+        var caller = 0;
+
+        if (AgentCueRegex().IsMatch(text))
+        {
+            agent += 4;
+        }
+
+        if (CallerCueRegex().IsMatch(text))
+        {
+            caller += 4;
+        }
+
+        if (AgentIntentRegex().IsMatch(text))
+        {
+            agent += 2;
+        }
+
+        if (CallerIntentRegex().IsMatch(text))
+        {
+            caller += 2;
+        }
+
+        if (AgentQuestionRegex().IsMatch(text))
+        {
+            agent += 2;
+        }
+
+        if (PersonalDataRegex().IsMatch(text))
+        {
+            caller += 3;
+        }
+
+        return (agent, caller);
+    }
+
+    private static IReadOnlyList<ConversationTurn> StabilizeDetectedRoles(
+        IEnumerable<ConversationTurn> turns)
+    {
+        var stabilized = new List<ConversationTurn>();
+        string? previousText = null;
+        var currentRole = "Caller";
+
+        foreach (var turn in turns)
+        {
+            var modelRole = turn.Role is "Agent" or "Caller" ? turn.Role : null;
+            var cueRole = InferRoleFromCue(turn.Text, previousText, modelRole ?? currentRole);
+            var evidence = ScoreRoleEvidence(turn.Text);
+            var hasStrongCue = Math.Abs(evidence.Agent - evidence.Caller) >= 2;
+            var role = modelRole;
+
+            if (hasStrongCue && cueRole is not null)
+            {
+                role = cueRole;
+            }
+            else if (role is null && cueRole is not null)
+            {
+                role = cueRole;
+            }
+            else if (role is null && previousText is not null && EndsWithQuestionOrPrompt(previousText))
+            {
+                role = OppositeRole(currentRole);
+            }
+
+            role ??= currentRole;
+            AddOrMergeTurn(stabilized, role, turn.Text);
+            currentRole = role;
+            previousText = turn.Text;
+        }
+
+        return stabilized;
+    }
+
+    private static string OppositeRole(string role) => role == "Agent" ? "Caller" : "Agent";
 
     private static bool EndsWithQuestionOrPrompt(string text)
     {
@@ -408,7 +498,7 @@ public sealed partial class RoleDetectionService(
 
     private static IReadOnlyList<ConversationTurn> ParseExplicitLabels(string transcript)
     {
-        var turns = new List<ConversationTurn>();
+        var labeledSegments = new List<LabeledSegment>();
         var matches = ExplicitLabelRegex().Matches(transcript);
 
         for (var i = 0; i < matches.Count; i++)
@@ -421,16 +511,67 @@ public sealed partial class RoleDetectionService(
 
             if (!string.IsNullOrWhiteSpace(text))
             {
-                turns.Add(new ConversationTurn
-                {
-                    Role = role,
-                    Text = text
-                });
+                labeledSegments.Add(new LabeledSegment(match.Groups[1].Value, role, text));
             }
         }
 
+        var genericRoleMap = InferGenericSpeakerRoles(labeledSegments);
+        var turns = labeledSegments.Select(segment => new ConversationTurn
+        {
+            Role = IsGenericSpeakerLabel(segment.Label)
+                ? genericRoleMap[NormalizeSpeakerLabel(segment.Label)]
+                : segment.Role,
+            Text = segment.Text
+        }).ToList();
+
         return turns.Count > 0 ? turns : SpeakerFallback(transcript);
     }
+
+    private static IReadOnlyDictionary<string, string> InferGenericSpeakerRoles(
+        IReadOnlyList<LabeledSegment> segments)
+    {
+        var speakerEvidence = segments
+            .Where(segment => IsGenericSpeakerLabel(segment.Label))
+            .GroupBy(segment => NormalizeSpeakerLabel(segment.Label), StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(segment => ScoreRoleEvidence(segment.Text))
+                    .Aggregate((Agent: 0, Caller: 0), (total, score) =>
+                        (total.Agent + score.Agent, total.Caller + score.Caller)),
+                StringComparer.Ordinal);
+
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (speakerEvidence.Count == 0)
+        {
+            return result;
+        }
+
+        if (speakerEvidence.Count == 1)
+        {
+            var only = speakerEvidence.Single();
+            result[only.Key] = only.Value.Agent > only.Value.Caller ? "Agent" : "Caller";
+            return result;
+        }
+
+        var ranked = speakerEvidence
+            .OrderByDescending(item => item.Value.Agent - item.Value.Caller)
+            .ThenBy(item => item.Key, StringComparer.Ordinal)
+            .ToList();
+
+        result[ranked[0].Key] = "Agent";
+        foreach (var speaker in ranked.Skip(1))
+        {
+            result[speaker.Key] = "Caller";
+        }
+
+        return result;
+    }
+
+    private static bool IsGenericSpeakerLabel(string label) =>
+        NormalizeSpeakerLabel(label) is "speaker1" or "speaker2";
+
+    private static string NormalizeSpeakerLabel(string label) =>
+        Regex.Replace(label.Trim().ToLowerInvariant(), @"\s+", string.Empty);
 
     private async Task<(IReadOnlyList<ConversationTurn> Turns, string? Warning)> TryDetectChunkWithOpenAiAsync(
         TranscriptChunk chunk,
@@ -748,46 +889,62 @@ public sealed partial class RoleDetectionService(
 
     private static IReadOnlyList<ConversationTurn> SpeakerFallback(string transcript)
     {
-        var parts = SplitCandidateTurns(transcript).ToList();
-
-        if (parts.Count == 0)
-        {
-            parts = SentenceRegex().Split(transcript)
-                .Select(part => part.Trim())
-                .Where(part => !string.IsNullOrWhiteSpace(part))
-                .ToList();
-        }
+        var candidateTurns = SplitCandidateTurns(transcript).ToList();
+        var hasTurnBoundaries = candidateTurns.Count > 1;
+        var parts = BuildRoleSegments(transcript).Select(segment => segment.Text).ToList();
 
         if (parts.Count == 0 && !string.IsNullOrWhiteSpace(transcript))
         {
             parts.Add(transcript.Trim());
         }
 
-        var firstRole = InferFallbackStartRole(parts.FirstOrDefault() ?? string.Empty);
-        var secondRole = firstRole == "Agent" ? "Caller" : "Agent";
-
-        return parts.Select((text, index) => new ConversationTurn
+        if (parts.Count == 0)
         {
-            Role = index % 2 == 0 ? firstRole : secondRole,
-            Text = text
-        }).ToList();
+            return [];
+        }
+
+        var turns = new List<ConversationTurn>();
+        var currentRole = InferFallbackStartRole(parts[0]);
+        string? previousText = null;
+
+        foreach (var text in parts)
+        {
+            var inferredRole = InferRoleFromCue(text, previousText, currentRole);
+            var role = inferredRole;
+
+            if (role is null && previousText is not null && EndsWithQuestionOrPrompt(previousText))
+            {
+                role = OppositeRole(currentRole);
+            }
+
+            if (role is null && hasTurnBoundaries && previousText is not null)
+            {
+                role = OppositeRole(currentRole);
+            }
+
+            role ??= currentRole;
+            AddOrMergeTurn(turns, role, text);
+            currentRole = role;
+            previousText = text;
+        }
+
+        return turns;
     }
 
     private static string InferFallbackStartRole(string text)
     {
-        if (AgentCueRegex().IsMatch(text)
-            || Regex.IsMatch(text, @"\b(how can i help|thank you for calling|this is .+ speaking)\b", RegexOptions.IgnoreCase))
+        var evidence = ScoreRoleEvidence(text);
+        if (evidence.Agent > evidence.Caller)
         {
             return "Agent";
         }
 
-        if (CallerCueRegex().IsMatch(text)
-            || Regex.IsMatch(text, @"\b(i'?m calling|i am calling|my name is|i would like|i need|i want|my phone|my email|my address|issues? still)\b", RegexOptions.IgnoreCase))
+        if (evidence.Caller > evidence.Agent)
         {
             return "Caller";
         }
 
-        return "Caller";
+        return OpeningAgentRegex().IsMatch(text) ? "Agent" : "Caller";
     }
 
     private static IReadOnlyList<ConversationTurn> RoleFallback(
@@ -924,5 +1081,22 @@ public sealed partial class RoleDetectionService(
     [GeneratedRegex(@"^(please|also please)\b|^(can you|could you)\b|^(sure|yes[,.]?\s+(please|everything|the|my|i|it|there|sure))\b|^(i do not|i don't|i want|i need)\b|^good[.!]?$|^there are also old ticket\b|^ticket\s+[A-Z]+[-\d]\b|^thank you,\s*i\b|իմ անունը|ուզում եմ|իմ հեռախոսահամար|իհարկե|ես ապրում եմ|իմ էլ|բարեւ|^այո[,։\s]|^խնդրում եմ|^կա նաև|^կա նաեւ|^ես upload|^file name-ը|^բայց status-ը|^ինձ ասացին|^employer-ը|^confirmation-ը ուղարկեք|^payment problem|^ես վճարել եմ|^bank statement|^communication preferences|^appointment reminders|^այսինքն|^email-ը|^նաեւ portal issue|^նաև portal issue|^appointment page|^փորձել եմ|^բոլոր տեղերում|^և մեկ բան|^եւ մեկ բան|^words like|^appointment-ը|^insurance card-ը|^billing-ը|^address-ը|^official documents-ը|^ticket-ը(?!\s+(և|եւ)\s+կխնդրեմ)|^ամեն ինչ|^[\w.%+-]+@[\w.-]+\.[A-Z]{2,}\b|^[A-Z]{2}\d{7}\b|^լավ,\s*շնորհակալություն", RegexOptions.IgnoreCase)]
     private static partial Regex CallerCueRegex();
 
+    [GeneratedRegex(@"\b(thank you for calling|how (?:can|may) i help|this is [\p{L} .'-]+ speaking|let me (?:check|look|review|pull up)|i (?:can|will|'ll) (?:help|check|review|submit|open|escalate|send|update|add|create|verify|confirm)|our (?:system|records|office|team|department))\b|շնորհակալություն զանգելու համար|ինչպե՞ս կարող եմ օգնել|մի պահ սպասեք|հիմա կստուգեմ", RegexOptions.IgnoreCase)]
+    private static partial Regex AgentIntentRegex();
+
+    [GeneratedRegex(@"\b(i'?m calling|i am calling|i (?:need|want|would like|cannot|can't|was|paid|uploaded)|i have (?:a|an|the|another)?\s*(?:problem|issue|question|request)|my (?:name|account|phone|email|address|date of birth|doctor|insurance|payment)|the problem is|i am having|i'm having)\b|իմ անունը|ուզում եմ|իմ հեռախոսահամար|ես ապրում եմ|իմ (?:հաշիվ|հասցե|էլ)", RegexOptions.IgnoreCase)]
+    private static partial Regex CallerIntentRegex();
+
+    [GeneratedRegex(@"\b(?:can|could|would|may) you (?:confirm|provide|tell|verify|spell|share)|\bmay i have your\b|\bwhat is your\b|\bdo you have\b|կարո՞ղ եք|կարող եք|ձեր (?:անուն|հասցե|հեռախոս|էլ)", RegexOptions.IgnoreCase)]
+    private static partial Regex AgentQuestionRegex();
+
+    [GeneratedRegex(@"\bmy (?:name|phone|email|address|date of birth|ssn|social security|member id|policy|account)\b|[\w.%+-]+@[\w.-]+\.[A-Z]{2,}\b|\b\+?\d[\d\s().-]{6,}\d\b|իմ անունը|իմ հեռախոսահամար|իմ էլ|ես ապրում եմ", RegexOptions.IgnoreCase)]
+    private static partial Regex PersonalDataRegex();
+
+    [GeneratedRegex(@"\b(thank you for calling|how (?:can|may) i help|this is [\p{L} .'-]+ speaking)\b|շնորհակալություն զանգելու համար|ինչպե՞ս կարող եմ օգնել", RegexOptions.IgnoreCase)]
+    private static partial Regex OpeningAgentRegex();
+
     private sealed record RoleSegment(int Id, string Text);
+
+    private sealed record LabeledSegment(string Label, string Role, string Text);
 }
